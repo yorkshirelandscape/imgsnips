@@ -142,10 +142,20 @@ def _read_pam(path):
 
 def open_extracted_image(path):
     """Open an image file mutool produced, handling formats Pillow can't
-    read natively (currently just PAM)."""
+    read natively (currently just PAM) and CMYK JPEGs written by Adobe tools.
+    Adobe's CMYK JPEG encoder stores channel values inverted (a legacy
+    Photoshop convention marked by the APP14 'Adobe' segment); libjpeg/Pillow
+    decode the bytes as-is without correcting for it, which otherwise leaves
+    every such image looking like a color negative."""
     if path.lower().endswith('.pam'):
         return _read_pam(path)
-    return Image.open(path)
+    im = Image.open(path)
+    if im.mode == 'CMYK' and im.info.get('adobe'):
+        im.load()
+        fixed = Image.eval(im, lambda x: 255 - x)
+        im.close()
+        return fixed
+    return im
 
 
 def canonical_png_path(img_dir, obj_num):
@@ -173,45 +183,46 @@ def normalize_to_png(img_dir, obj_num):
     return png_path
 
 
-def merge_smask_alpha(img_dir):
-    """Pair RGB(A) images with grayscale/indexed images of matching size as
-    alpha masks, then composite and trim the transparent border. Works across
-    mixed jpg/png sources found in img_dir."""
-    files = sorted(os.listdir(img_dir))
-    image_info = []
-    for fname in files:
-        if fname.startswith('image-') and fname.lower().endswith(('.png', '.jpg', '.jpeg', '.pam')):
-            fpath = os.path.join(img_dir, fname)
-            try:
-                with open_extracted_image(fpath) as im:
-                    image_info.append({'fname': fname, 'size': im.size, 'mode': im.mode, 'fpath': fpath})
-            except Exception as e:
-                print(f"[WARN] Could not open {fname}: {e}")
+_SMASK_REF_RE = re.compile(r'/SMask (\d+) 0 R')
+_MASK_REF_RE = re.compile(r'/Mask (\d+) 0 R')
+_OBJ_LINE_RE = re.compile(r'^(\d+) 0 obj\b')
 
-    def extract_obj_num(fname):
-        m = re.search(r'image-(\d+)', fname)
-        return int(m.group(1)) if m else -1
 
-    image_info_sorted = sorted(image_info, key=lambda x: extract_obj_num(x['fname']))
-    used_masks = set()
+def get_mask_refs(pdf_path, obj_nums):
+    """Look up each image object's real /SMask (or, failing that, /Mask)
+    reference directly from the PDF, via `mutool show -g` (one compact line
+    per object, no stream bytes). Guessing image/mask pairs from extracted
+    file order and matching pixel size is unreliable: this document reuses
+    identical dimensions for repeated cover art, logos, and CMYK swatches, so
+    a size-based match can silently pair an image with an unrelated mask.
+    Returns {obj_num: mask_obj_num} for objects that have a mask."""
+    if not obj_nums:
+        return {}
+    mutool = _resolve_mutool()
+    cmd = [mutool, 'show', '-g', pdf_path] + [str(n) for n in obj_nums]
+    result = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+    refs = {}
+    for line in result.stdout.splitlines():
+        m = _OBJ_LINE_RE.match(line)
+        if not m:
+            continue
+        obj_num = int(m.group(1))
+        ref = _SMASK_REF_RE.search(line) or _MASK_REF_RE.search(line)
+        if ref:
+            refs[obj_num] = int(ref.group(1))
+    return refs
+
+
+def merge_smask_alpha(img_dir, mask_refs):
+    """Composite each image with its real mask (as identified by mask_refs,
+    the ground-truth obj_num -> mask_obj_num mapping from the PDF itself),
+    then trim the transparent border."""
     merged_count = 0
-    for i, rgb in enumerate(image_info_sorted):
-        if rgb['mode'] not in ('RGB', 'RGBA'):
+    for obj_num, mask_obj_num in mask_refs.items():
+        rgb_path = find_extracted_file(img_dir, obj_num)
+        mask_path = find_extracted_file(img_dir, mask_obj_num)
+        if not rgb_path or not mask_path:
             continue
-        best_mask = None
-        for j in range(i + 1, len(image_info_sorted)):
-            mask = image_info_sorted[j]
-            if mask['fname'] == rgb['fname'] or mask['fname'] in used_masks:
-                continue
-            if mask['mode'] in ('RGB', 'RGBA'):
-                continue
-            if abs(mask['size'][0] - rgb['size'][0]) <= 2 and abs(mask['size'][1] - rgb['size'][1]) <= 2:
-                best_mask = mask
-                break
-        if not best_mask:
-            continue
-        rgb_path = rgb['fpath']
-        mask_path = best_mask['fpath']
         try:
             with open_extracted_image(rgb_path) as im:
                 im = im.convert('RGBA')
@@ -228,15 +239,13 @@ def merge_smask_alpha(img_dir):
                         im_rgba = im_rgba.crop(bbox)
                     # Alpha compositing means the merged result must live in a
                     # png, even if the source image was a jpg.
-                    obj_num = extract_obj_num(rgb['fname'])
                     out_path = canonical_png_path(img_dir, obj_num)
                     im_rgba.save(out_path)
                     if out_path != rgb_path and os.path.exists(rgb_path):
                         os.remove(rgb_path)
                     merged_count += 1
-                    used_masks.add(best_mask['fname'])
         except Exception as e:
-            print(f"[WARN] Failed to merge {rgb['fname']} + {best_mask['fname']}: {e}")
+            print(f"[WARN] Failed to merge image {obj_num} + mask {mask_obj_num}: {e}")
     print(f"[INFO] Merged {merged_count} image+mask pairs.")
 
 
@@ -288,7 +297,8 @@ def extract_images(pdf_path, outdir):
         return []
 
     run_mutool_extract(pdf_path, outdir)
-    merge_smask_alpha(outdir)
+    mask_refs = get_mask_refs(pdf_path, [img['obj_num'] for img in images])
+    merge_smask_alpha(outdir, mask_refs)
 
     img_files = []
     for img in images:
