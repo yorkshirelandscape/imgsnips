@@ -20,6 +20,7 @@ import pdf_extract as pe
 # runtime (sys._MEIPASS), not next to the script/executable.
 SCRIPT_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 SPINNER_PATH = os.path.join(SCRIPT_DIR, 'spinner.gif')
+ICON_PATH = os.path.join(SCRIPT_DIR, 'imgsnips.png')
 THUMB_SIZE = 160
 GRID_COLS = 4
 MUPDF_DOWNLOADS_URL = 'https://mupdf.com/downloads/'
@@ -126,7 +127,7 @@ class FullImageDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('PDF Image Selector')
+        self.setWindowTitle('ImgSnips')
         self.images = []
         self.tmpdir = None
         self.spinner_movie = None
@@ -284,7 +285,7 @@ class MainWindow(QMainWindow):
         missing_layout.addWidget(title_label)
 
         intro_label = QLabel(
-            "PyPdf2Imgs needs mutool (part of MuPDF) to extract images from "
+            "ImgSnips needs mutool (part of MuPDF) to extract images from "
             "PDFs, but it wasn't found on your system."
         )
         intro_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -301,8 +302,14 @@ class MainWindow(QMainWindow):
         if command:
             command_label = QLabel(command)
             command_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            # A literal "monospace" in the stylesheet forces Qt to enumerate
+            # every installed font family to resolve the generic CSS alias
+            # (the source of the "Populating font family aliases" startup
+            # cost); asking for the fixed-width system font directly skips
+            # that lookup.
+            command_label.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
             command_label.setStyleSheet(
-                'font-family: monospace; background: rgba(127, 127, 127, 0.15); '
+                'background: rgba(127, 127, 127, 0.15); '
                 'padding: 6px 10px; border-radius: 4px;'
             )
             command_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -586,6 +593,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(ICON_PATH))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

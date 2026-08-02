@@ -20,13 +20,13 @@ jobs:
         # onedir, not onefile: PyInstaller deprecates --onefile combined with
         # --windowed .app bundles on macOS (a .app can't be a single file) and
         # will make it a hard error in v7.0.
-        run: pipenv run pyinstaller --windowed --name PyPdf2Imgs --add-data "spinner.gif:." main.py
+        run: pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py
       - name: Remove redundant loose build
-        # --windowed on macOS produces both a bare dist/PyPdf2Imgs/ onedir
+        # --windowed on macOS produces both a bare dist/ImgSnips/ onedir
         # folder and a .app bundle wrapping its own copy of the same contents.
         # Only the .app is meant to be distributed; drop the loose one so the
         # zip isn't doubled up.
-        run: rm -rf dist/PyPdf2Imgs
+        run: rm -rf dist/ImgSnips
       - name: Add Gatekeeper quarantine-removal helper
         # The app isn't signed with a paid Apple Developer ID, so Gatekeeper
         # flags it. Ship a one-click script to clear the quarantine flag
@@ -39,7 +39,7 @@ jobs:
         uses: thedoctor0/zip-release@0.7.6
         with:
           directory: dist
-          filename: "PyPdf2Imgs-macos.zip"
+          filename: "ImgSnips-macos.zip"
           # -y: store symlinks as symlinks. Without it, plain `zip -r` (this
           # action's default) dereferences them, turning the .app bundle's
           # Contents/Resources/* symlinks into full duplicate copies of
@@ -51,8 +51,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PyPdf2Imgs-macos
-          path: dist/PyPdf2Imgs-macos.zip
+          name: ImgSnips-macos
+          path: dist/ImgSnips-macos.zip
 
   build-windows:
     runs-on: windows-latest
@@ -67,19 +67,19 @@ jobs:
       - name: Install dependencies
         run: pipenv install --dev
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name PyPdf2Imgs --add-data "spinner.gif;." main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6
         with:
           directory: dist
-          filename: "PyPdf2Imgs-windows.zip"
+          filename: "ImgSnips-windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PyPdf2Imgs-windows
-          path: dist/PyPdf2Imgs-windows.zip
+          name: ImgSnips-windows
+          path: dist/ImgSnips-windows.zip
 
   build-linux:
     runs-on: ubuntu-latest
@@ -94,19 +94,19 @@ jobs:
       - name: Install dependencies
         run: pipenv install --dev
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name PyPdf2Imgs --add-data "spinner.gif:." main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6
         with:
           directory: dist
-          filename: "PyPdf2Imgs-linux.zip"
+          filename: "ImgSnips-linux.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: PyPdf2Imgs-linux
-          path: dist/PyPdf2Imgs-linux.zip
+          name: ImgSnips-linux
+          path: dist/ImgSnips-linux.zip
 
   release:
     needs: [build-macos, build-windows, build-linux]

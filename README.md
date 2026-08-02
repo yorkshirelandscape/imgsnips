@@ -1,4 +1,4 @@
-# PyPdf2Imgs
+# ImgSnips
 
 A modern, user-friendly tool for extracting and saving images from PDF files using a graphical interface. Built with Python and PyQt6, it leverages [mutool](https://mupdf.com/docs/manual-mutool.html) for fast, accurate image extraction.
 
@@ -16,9 +16,9 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 
 ## Installation
 1. Download the appropriate executable from GitHub Releases:
-   - [macOS](https://github.com/yorkshirelandscape/pyPdf2Imgs/releases/latest/download/PyPdf2Imgs-macos.zip)
-   - [Windows](https://github.com/yorkshirelandscape/pyPdf2Imgs/releases/latest/download/PyPdf2Imgs-windows.zip)
-   - [Linux](https://github.com/yorkshirelandscape/pyPdf2Imgs/releases/latest/download/PyPdf2Imgs-linux.zip)
+   - [macOS](https://github.com/yorkshirelandscape/imgsnips/releases/latest/download/ImgSnips-macos.zip)
+   - [Windows](https://github.com/yorkshirelandscape/imgsnips/releases/latest/download/ImgSnips-windows.zip)
+   - [Linux](https://github.com/yorkshirelandscape/imgsnips/releases/latest/download/ImgSnips-linux.zip)
 2. Install [mutool](https://mupdf.com/downloads/) for your platform and ensure it is available in your PATH:
    - **macOS:** `brew install mupdf-tools`
    - **Windows/Linux:** download from [mupdf.com](https://mupdf.com/downloads/), or use your package manager (e.g. `sudo apt install mupdf-tools`)
@@ -26,7 +26,7 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
    - **Easiest:** double-click `Fix macOS Warning.command`, included in the zip next to the app. (It'll still prompt you once, since it's also unsigned — right-click it and choose "Open" instead of double-clicking if it doesn't open normally.)
    - **Or manually:** run this in Terminal after unzipping:
      ```sh
-     xattr -d -r com.apple.quarantine PyPdf2Imgs.app
+     xattr -d -r com.apple.quarantine ImgSnips.app
      ```
 
 ## Usage
@@ -46,17 +46,17 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 
 ### Run from source
 1. Install pipenv: `pip install --user pipenv`
-2. Clone the repository: `git clone https://github.com/yorkshirelandscape/pyPdf2Imgs.git`
-3. Navigate into the directory: `cd pyPdf2Imgs`
+2. Clone the repository: `git clone https://github.com/yorkshirelandscape/imgsnips.git`
+3. Navigate into the directory: `cd imgsnips`
 4. Install dependencies: `pipenv install`
 5. Run it: `pipenv run python main.py`
 
 ### Build your own executable
 1. Install dev dependencies: `pipenv install --dev`
-2. Build with PyInstaller, bundling the spinner asset:
-   - **macOS:** `pipenv run pyinstaller --windowed --name PyPdf2Imgs --add-data "spinner.gif:." main.py` (onedir, not onefile — PyInstaller deprecates combining `--onefile` with a `--windowed` .app bundle on macOS)
-   - **Linux:** `pipenv run pyinstaller --onefile --windowed --name PyPdf2Imgs --add-data "spinner.gif:." main.py`
-   - **Windows:** `pipenv run pyinstaller --onefile --windowed --name PyPdf2Imgs --add-data "spinner.gif;." main.py`
+2. Build with PyInstaller, bundling the spinner and app icon assets:
+   - **macOS:** `pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py` (onedir, not onefile — PyInstaller deprecates combining `--onefile` with a `--windowed` .app bundle on macOS)
+   - **Linux:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py`
+   - **Windows:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py`
 3. Find the executable in `dist/`.
 
 ## License

@@ -5,12 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- Renamed the project from PyPdf2Imgs to ImgSnips, including the window title (previously "PDF Image Selector").
+- The app now ships with a real icon (in the window, on the packaged .app/.exe, and in the taskbar/Dock) instead of falling back to a generic default.
+
 ### Added
 - The "Saved N images to ..." confirmation popup now shows the destination folder as a clickable link that opens it in the system file manager, instead of plain unclickable text.
 
 ### Fixed
 - Image/alpha-mask pairing no longer guesses which extracted file is the correct mask by matching pixel dimensions; it now reads each image's real `/SMask` reference straight from the PDF. The old heuristic broke down whenever the document reused identical dimensions for repeated cover art, logos, or color swatches, causing images partway through a PDF to get cropped or recolored using the wrong mask.
 - CMYK JPEGs written by Adobe tools (InDesign, Photoshop) were rendering as color negatives of themselves; Adobe's CMYK JPEG encoder stores channel values inverted, and Pillow doesn't correct for it automatically. Extraction now detects and un-inverts these images.
+- The mutool-missing screen referenced the generic CSS font family "monospace" in a stylesheet, forcing Qt to enumerate every installed font to resolve the alias (a startup cost of a couple hundred milliseconds); it now asks for the system's fixed-width font directly instead.
 
 ## [1.0.0] - 2026-07-23
 ### Added

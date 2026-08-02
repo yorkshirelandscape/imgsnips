@@ -395,4 +395,4 @@ def make_extract_dir(base_tmpdir=None):
     import tempfile
     if base_tmpdir and os.path.exists(base_tmpdir):
         shutil.rmtree(base_tmpdir)
-    return tempfile.mkdtemp(prefix='pypdf2imgs_')
+    return tempfile.mkdtemp(prefix='imgsnips_')
