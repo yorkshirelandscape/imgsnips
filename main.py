@@ -4,8 +4,8 @@ import shutil
 import tempfile
 import platform
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QMovie, QPixmap, QCursor, QPalette, QColor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
+from PyQt6.QtGui import QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFontDatabase
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QFileDialog,
@@ -569,7 +569,14 @@ class MainWindow(QMainWindow):
                 kept += 1
             except Exception as e:
                 print(f"[WARN] Failed to save {img['orig_path']}: {e}")
-        QMessageBox.information(self, 'Done', f'Saved {kept} images to {outdir}')
+        outdir_url = QUrl.fromLocalFile(outdir).toString()
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle('Done')
+        msg.setText(f'Saved {kept} images to <a href="{outdir_url}">{outdir}</a>')
+        for label in msg.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
+        msg.exec()
 
     def closeEvent(self, event):
         if self.tmpdir and os.path.exists(self.tmpdir):
