@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The "Saved N images to ..." confirmation popup shows the destination folder as a clickable link that opens it in the system file manager
 
 ### Fixed
+- The release build failed on every platform (`ModuleNotFoundError: No module named 'packaging'` from inside PyInstaller's own hooks) because `packaging` was only ever a transitive dependency; declared it explicitly as a dev dependency.
 - Background/full-page images that mutool extracts as JPEG were silently skipped, since the app assumed every extracted image was a PNG; extraction now resolves the actual file mutool produced for each image object
 - Alpha-mask merging no longer fails when the base image is a JPEG (previously errored trying to save an RGBA result with a .jpg extension)
 - Renaming an image now actually affects the exported filename (previously ignored by the save step)

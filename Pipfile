@@ -10,6 +10,7 @@ pyqt6 = "*"
 [dev-packages]
 pyinstaller = "*"
 keepachangelog-manager = "*"
+packaging = "*"
 
 [requires]
 python_version = "3.13"
