@@ -61,4 +61,10 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 4. Find the executable in `dist/`.
 
 ## License
-[MIT License](LICENSE)
+[GNU Affero General Public License v3.0](LICENSE)
+
+ImgSnips bundles PyQt6, which is licensed GPL-3.0-only (dual-licensed with a paid
+Riverbank commercial license). Distributing an application built on GPL-3.0-only
+PyQt6 is bound by GPLv3's terms regardless of the license label attached to the
+application's own code, so ImgSnips is licensed under the AGPL-3.0 (compatible
+with GPL-3.0-only via each license's section 13) to match.

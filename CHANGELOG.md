@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [1.0.0] - 2026-08-03
+> **License correction (2026-08-04):** this release was originally tagged and published under the MIT License, but bundling GPL-3.0-only PyQt6 meant the distributed application was always bound by GPLv3 terms regardless of that label. The `1.0.0` tag has been corrected in place to the AGPL-3.0.
+
 ### Added
 - PyQt6-based GUI, replacing the original Tkinter implementation
 - Centered "Open PDF" button as the initial view, instead of auto-prompting a file dialog on launch
