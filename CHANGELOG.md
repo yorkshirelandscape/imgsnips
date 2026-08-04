@@ -6,7 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Extraction now uses PyMuPDF directly instead of shelling out to a separately-installed `mutool` binary. No more "mutool not found" screen, PATH lookups, or install instructions -- PyMuPDF is bundled with the app, so images are extracted straight from the PDF in-process, with mask pairing and CMYK JPEG handling behaving the same as before.
+- Relicensed from MIT to AGPL-3.0. PyMuPDF is dual-licensed under the AGPL-3.0 or a commercial license from Artifex; bundling it means ImgSnips's distribution now includes AGPL-licensed code, so the project is licensed under the AGPL-3.0 to match.
+
+### ToDo
+- Round 1
+  - Change default to none selected
+  - Shift+Click should work as expected
+  - double-click icon to preview
+  - double-click name to rename
+  - Add a copy button per image
+  - New layout per image:
+    |✏️  name   🔄|
+    |🔎  size   📑|
+    ---------------
+  - Right click image or rotate button to rotate clockwise
+    - Option/Alt+Click either to rotate counter-clockwise
+- Round 2
+  - Allow user to change icon scale
+  - Option to set background color instead of transparent
+  - When saving, prompt to confirm file overwriting
+- Round 3
+  - Open two PDFs at once
+  - Appear in context menu's Open with... list
+
 ## [1.0.0] - 2026-08-03
+> **License correction (2026-08-04):** originally published under the MIT License, but bundling GPL-3.0-only PyQt6 meant the distributed application was always bound by GPLv3 terms regardless of that label. Retroactively relicensed under the AGPL-3.0, matching the license used going forward.
+
 ### Added
 - PyQt6-based GUI, replacing the original Tkinter implementation
 - Centered "Open PDF" button as the initial view, instead of auto-prompting a file dialog on launch

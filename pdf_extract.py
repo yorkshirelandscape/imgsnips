@@ -1,252 +1,101 @@
-"""PDF image extraction backend (mutool-based). No UI dependencies."""
+"""PDF image extraction backend (PyMuPDF-based). No UI dependencies."""
+# ImgSnips
+# Copyright (C) 2026 Andrew Howard
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published
+# by the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 import os
-import re
-import glob
-import shutil
+import io
 import hashlib
-import subprocess
+import pymupdf
 from PIL import Image, ImageChops
-
-MUTOOL = 'mutool'
-
-# GUI apps launched from Finder/Explorer (as opposed to a terminal) don't
-# inherit the shell's PATH, so a plain subprocess.run(['mutool', ...]) can
-# fail even when mutool is properly installed. Fall back to the locations
-# common package managers actually use.
-MUTOOL_FALLBACK_PATHS = [
-    '/opt/homebrew/bin/mutool',        # Homebrew, Apple Silicon
-    '/usr/local/bin/mutool',           # Homebrew, Intel Mac / common Linux
-    '/opt/local/bin/mutool',           # MacPorts
-    '/usr/bin/mutool',                 # Linux distro packages
-    '/snap/bin/mutool',                # Linux snap packages
-    r'C:\Program Files\mupdf\mutool.exe',
-    r'C:\Program Files (x86)\mupdf\mutool.exe',
-]
-
-
-class MutoolNotFoundError(RuntimeError):
-    pass
-
-
-def find_mutool():
-    found = shutil.which(MUTOOL)
-    if found:
-        return found
-    for path in MUTOOL_FALLBACK_PATHS:
-        if os.path.isfile(path):
-            return path
-    return None
-
-
-def _resolve_mutool():
-    path = find_mutool()
-    if not path:
-        raise MutoolNotFoundError(
-            "Could not find 'mutool'. Install MuPDF tools (e.g. 'brew install "
-            "mupdf-tools' on macOS, 'apt install mupdf-tools' on Linux, or "
-            "download from https://mupdf.com/downloads/ on Windows)."
-        )
-    return path
-
-
-def run_mutool_info(pdf_path):
-    mutool = _resolve_mutool()
-    result = subprocess.run([mutool, 'info', '-I', pdf_path], capture_output=True, text=True)
-    return result.stdout
-
-
-def run_mutool_extract(pdf_path, outdir):
-    mutool = _resolve_mutool()
-    pdf_path = os.path.abspath(pdf_path)
-    cmd = [mutool, 'extract', pdf_path]
-    return subprocess.run(cmd, cwd=outdir, capture_output=True, text=True)
-
-
-def parse_image_info(info_text):
-    images = []
-    lines = info_text.splitlines()
-    in_images_section = False
-    for line in lines:
-        if line.strip().startswith('Images ('):
-            in_images_section = True
-            continue
-        if in_images_section:
-            parts = line.strip().split('\t')
-            if len(parts) < 3:
-                continue
-            page = int(parts[0])
-            dims = [p for p in parts[2].split(' ') if 'x' in p and p[0].isdigit()]
-            obj_num = int(parts[2].split('(')[1].split(' ')[0])
-            if dims:
-                width, height = [int(d) for d in dims[0].split('x')]
-            else:
-                width = height = '?'
-            images.append({'page': page, 'obj_num': obj_num, 'width': width, 'height': height})
-    return images
-
-
-def find_extracted_file(img_dir, obj_num):
-    """mutool extract picks the file extension per-object based on its encoding
-    (.jpg for DCT/JPEG streams, .png for everything else it has to decode). Find
-    whatever it actually produced for this object number rather than assuming png."""
-    matches = glob.glob(os.path.join(img_dir, f"image-{obj_num:04d}.*"))
-    return matches[0] if matches else None
-
-
-_PAM_MODE_BY_TUPLTYPE = {
-    ('CMYK', 4): 'CMYK',
-    ('RGB_ALPHA', 4): 'RGBA',
-    ('RGB', 3): 'RGB',
-    ('GRAYSCALE_ALPHA', 2): 'LA',
-    ('GRAYSCALE', 1): 'L',
-    ('BLACKANDWHITE', 1): '1',
-}
-
-
-def _read_pam(path):
-    """Parse a PAM (Portable Arbitrary Map) file. mutool falls back to this
-    format when decoded pixel data doesn't fit cleanly into PNG or JPEG (e.g.
-    raw CMYK from an indexed-color image), and Pillow cannot open PAM files
-    natively."""
-    with open(path, 'rb') as f:
-        data = f.read()
-    if not data.startswith(b'P7\n'):
-        raise ValueError(f'Not a PAM file: {path}')
-    header_end = data.index(b'ENDHDR\n') + len(b'ENDHDR\n')
-    fields = {}
-    for line in data[:header_end].decode('ascii', errors='replace').splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[0] in ('WIDTH', 'HEIGHT', 'DEPTH', 'MAXVAL'):
-            fields[parts[0]] = int(parts[1])
-        elif len(parts) == 2 and parts[0] == 'TUPLTYPE':
-            fields['TUPLTYPE'] = parts[1]
-    width, height, depth = fields['WIDTH'], fields['HEIGHT'], fields['DEPTH']
-    tupltype = fields.get('TUPLTYPE')
-    pixel_data = data[header_end:header_end + width * height * depth]
-
-    if (tupltype, depth) == ('CMYK_ALPHA', 5):
-        # Pillow has no native 5-channel mode; split the interleaved bands
-        # (each Nth byte is one channel) and reassemble as RGBA.
-        size = (width, height)
-        c, m, y, k, a = (
-            Image.frombytes('L', size, pixel_data[i::5]) for i in range(5)
-        )
-        rgb = Image.merge('CMYK', (c, m, y, k)).convert('RGB')
-        return Image.merge('RGBA', (*rgb.split(), a))
-
-    mode = _PAM_MODE_BY_TUPLTYPE.get((tupltype, depth))
-    if mode is None:
-        raise ValueError(f"Unsupported PAM tuple type/depth: {tupltype}/{depth}")
-    return Image.frombytes(mode, (width, height), pixel_data)
-
-
-def open_extracted_image(path):
-    """Open an image file mutool produced, handling formats Pillow can't
-    read natively (currently just PAM) and CMYK JPEGs written by Adobe tools.
-    Adobe's CMYK JPEG encoder stores channel values inverted (a legacy
-    Photoshop convention marked by the APP14 'Adobe' segment); libjpeg/Pillow
-    decode the bytes as-is without correcting for it, which otherwise leaves
-    every such image looking like a color negative."""
-    if path.lower().endswith('.pam'):
-        return _read_pam(path)
-    im = Image.open(path)
-    if im.mode == 'CMYK' and im.info.get('adobe'):
-        im.load()
-        fixed = Image.eval(im, lambda x: 255 - x)
-        im.close()
-        return fixed
-    return im
 
 
 def canonical_png_path(img_dir, obj_num):
     return os.path.join(img_dir, f"image-{obj_num:04d}.png")
 
 
-def normalize_to_png(img_dir, obj_num):
-    """Ensure image-{obj_num}.png exists as an RGBA PNG, regardless of the
-    extension/mode mutool originally produced. Removes the stale non-png
-    original once converted. Returns the canonical png path, or None if the
-    object wasn't extracted at all."""
-    png_path = canonical_png_path(img_dir, obj_num)
-    src_path = find_extracted_file(img_dir, obj_num)
-    if src_path is None:
-        return None
-    if src_path == png_path:
-        # Already the canonical file; still make sure it has alpha.
-        with Image.open(png_path) as im:
-            if im.mode != 'RGBA':
-                im.convert('RGBA').save(png_path)
-        return png_path
-    with open_extracted_image(src_path) as im:
-        im.convert('RGBA').save(png_path)
-    os.remove(src_path)
-    return png_path
+def _explicit_mask_xref(doc, xref):
+    """Some PDFs reference a hard /Mask (stencil mask) instead of a soft
+    /SMask. /Mask can also be inline color-key masking (an array of
+    integers, not an image reference) -- only follow it when it's actually
+    an indirect object reference."""
+    kind, value = doc.xref_get_key(xref, 'Mask')
+    if kind == 'xref':
+        return int(value.split()[0])
+    return None
 
 
-_SMASK_REF_RE = re.compile(r'/SMask (\d+) 0 R')
-_MASK_REF_RE = re.compile(r'/Mask (\d+) 0 R')
-_OBJ_LINE_RE = re.compile(r'^(\d+) 0 obj\b')
+def enumerate_images(doc):
+    """One entry per distinct image object (not per page reference -- the
+    same image xref can be reused across many pages, e.g. repeated cover
+    art or logos), each carrying its real mask xref read straight from the
+    PDF. Guessing image/mask pairs from extraction order and matching pixel
+    size is unreliable: documents that reuse identical dimensions for
+    repeated cover art, logos, or color swatches can silently pair an image
+    with an unrelated mask."""
+    seen = {}
+    for page_num in range(doc.page_count):
+        for img in doc[page_num].get_images(full=True):
+            xref, smask, width, height = img[0], img[1], img[2], img[3]
+            if xref in seen:
+                continue
+            mask_xref = smask or _explicit_mask_xref(doc, xref)
+            seen[xref] = {
+                'page': page_num + 1,
+                'obj_num': xref,
+                'width': width,
+                'height': height,
+                'mask_xref': mask_xref or None,
+            }
+    return list(seen.values())
 
 
-def get_mask_refs(pdf_path, obj_nums):
-    """Look up each image object's real /SMask (or, failing that, /Mask)
-    reference directly from the PDF, via `mutool show -g` (one compact line
-    per object, no stream bytes). Guessing image/mask pairs from extracted
-    file order and matching pixel size is unreliable: this document reuses
-    identical dimensions for repeated cover art, logos, and CMYK swatches, so
-    a size-based match can silently pair an image with an unrelated mask.
-    Returns {obj_num: mask_obj_num} for objects that have a mask."""
-    if not obj_nums:
-        return {}
-    mutool = _resolve_mutool()
-    cmd = [mutool, 'show', '-g', pdf_path] + [str(n) for n in obj_nums]
-    result = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
-    refs = {}
-    for line in result.stdout.splitlines():
-        m = _OBJ_LINE_RE.match(line)
-        if not m:
-            continue
-        obj_num = int(m.group(1))
-        ref = _SMASK_REF_RE.search(line) or _MASK_REF_RE.search(line)
-        if ref:
-            refs[obj_num] = int(ref.group(1))
-    return refs
+def _open_raw_image(doc, xref):
+    """Decode an image object to a PIL image, handling CMYK JPEGs written by
+    Adobe tools (InDesign, Photoshop) that render as color negatives of
+    themselves: Adobe's CMYK JPEG encoder stores channel values inverted (a
+    legacy Photoshop convention marked by the APP14 'Adobe' segment), and
+    neither libjpeg nor MuPDF's own decoder correct for it automatically."""
+    data = doc.extract_image(xref)['image']
+    im = Image.open(io.BytesIO(data))
+    im.load()
+    if im.mode == 'CMYK' and im.info.get('adobe'):
+        im = Image.eval(im, lambda x: 255 - x)
+    return im
 
 
-def merge_smask_alpha(img_dir, mask_refs):
-    """Composite each image with its real mask (as identified by mask_refs,
-    the ground-truth obj_num -> mask_obj_num mapping from the PDF itself),
-    then trim the transparent border."""
-    merged_count = 0
-    for obj_num, mask_obj_num in mask_refs.items():
-        rgb_path = find_extracted_file(img_dir, obj_num)
-        mask_path = find_extracted_file(img_dir, mask_obj_num)
-        if not rgb_path or not mask_path:
-            continue
-        try:
-            with open_extracted_image(rgb_path) as im:
-                im = im.convert('RGBA')
-                with open_extracted_image(mask_path) as smask:
-                    smask = smask.convert('L')
-                    if smask.size != im.size:
-                        resample = getattr(Image, 'Resampling', Image).LANCZOS
-                        smask = smask.resize(im.size, resample)
-                    r, g, b, _ = im.split()
-                    im_rgba = Image.merge('RGBA', (r, g, b, smask))
-                    alpha = im_rgba.split()[-1]
-                    bbox = alpha.getbbox()
-                    if bbox:
-                        im_rgba = im_rgba.crop(bbox)
-                    # Alpha compositing means the merged result must live in a
-                    # png, even if the source image was a jpg.
-                    out_path = canonical_png_path(img_dir, obj_num)
-                    im_rgba.save(out_path)
-                    if out_path != rgb_path and os.path.exists(rgb_path):
-                        os.remove(rgb_path)
-                    merged_count += 1
-        except Exception as e:
-            print(f"[WARN] Failed to merge image {obj_num} + mask {mask_obj_num}: {e}")
-    print(f"[INFO] Merged {merged_count} image+mask pairs.")
+def extract_and_normalize(doc, outdir, img):
+    """Decode one image object -- merging its mask into an alpha channel and
+    trimming the transparent border if it has one -- straight to a
+    canonical RGBA PNG on disk. Returns the output path."""
+    obj_num = img['obj_num']
+    out_path = canonical_png_path(outdir, obj_num)
+    im = _open_raw_image(doc, obj_num).convert('RGBA')
+    mask_xref = img['mask_xref']
+    if mask_xref:
+        mask_im = _open_raw_image(doc, mask_xref).convert('L')
+        if mask_im.size != im.size:
+            resample = getattr(Image, 'Resampling', Image).LANCZOS
+            mask_im = mask_im.resize(im.size, resample)
+        r, g, b, _ = im.split()
+        im = Image.merge('RGBA', (r, g, b, mask_im))
+        bbox = im.split()[-1].getbbox()
+        if bbox:
+            im = im.crop(bbox)
+    im.save(out_path)
+    return out_path
 
 
 def trim_whitespace(im):
@@ -288,38 +137,38 @@ def hamming_distance(a, b):
 
 
 def extract_images(pdf_path, outdir):
-    """Full pipeline: mutool info -> extract -> smask merge -> normalize ->
-    thumbnails -> exact + perceptual dedup. Returns a list of image dicts:
+    """Full pipeline: enumerate embedded image objects -> decode + merge
+    masks straight to canonical PNGs -> thumbnails -> exact + perceptual
+    dedup. Returns a list of image dicts:
     {filename, meta, orig_path, thumb_path, save_name}."""
-    info = run_mutool_info(pdf_path)
-    images = parse_image_info(info)
-    if not images:
+    doc = pymupdf.open(pdf_path)
+    try:
+        images = enumerate_images(doc)
+        if not images:
+            return []
+
+        img_files = []
+        for img in images:
+            obj_num = img['obj_num']
+            try:
+                orig_path = extract_and_normalize(doc, outdir, img)
+            except Exception as e:
+                # One image object in a shape/colorspace we can't decode
+                # shouldn't take down every other image in the file with it.
+                print(f"[WARN] Skipping image object {obj_num}, could not decode: {e}")
+                continue
+            img_files.append({
+                'filename': os.path.basename(orig_path),
+                'meta': {k: img[k] for k in ('page', 'obj_num', 'width', 'height')},
+                'orig_path': orig_path,
+                'thumb_path': os.path.join(outdir, f"thumb-{obj_num:04d}.png"),
+                'save_name': None,
+            })
+    finally:
+        doc.close()
+
+    if not img_files:
         return []
-
-    run_mutool_extract(pdf_path, outdir)
-    mask_refs = get_mask_refs(pdf_path, [img['obj_num'] for img in images])
-    merge_smask_alpha(outdir, mask_refs)
-
-    img_files = []
-    for img in images:
-        obj_num = img['obj_num']
-        try:
-            orig_path = normalize_to_png(outdir, obj_num)
-        except Exception as e:
-            # However complete our format handling is, one image mutool
-            # produces in a shape we don't recognize (or can't decode)
-            # shouldn't take down every other image in the file with it.
-            print(f"[WARN] Skipping image object {obj_num}, could not normalize: {e}")
-            continue
-        if orig_path is None:
-            continue
-        img_files.append({
-            'filename': os.path.basename(orig_path),
-            'meta': img,
-            'orig_path': orig_path,
-            'thumb_path': os.path.join(outdir, f"thumb-{obj_num:04d}.png"),
-            'save_name': None,
-        })
 
     # Exact-duplicate removal (identical bytes).
     seen_hashes = set()
@@ -393,6 +242,7 @@ def extract_images(pdf_path, outdir):
 def make_extract_dir(base_tmpdir=None):
     """Create/clear a fresh extraction directory."""
     import tempfile
+    import shutil
     if base_tmpdir and os.path.exists(base_tmpdir):
         shutil.rmtree(base_tmpdir)
     return tempfile.mkdtemp(prefix='imgsnips_')

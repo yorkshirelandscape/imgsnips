@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 pillow = "*"
 pyqt6 = "*"
+pymupdf = "*"
 
 [dev-packages]
 pyinstaller = "*"
