@@ -6,26 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Images start unselected instead of all-selected by default.
+- Shift+click an image to range-select from the last-clicked image to it.
+- Double-click a thumbnail to preview it full-size; double-click a name to rename it.
+- A copy button per image, for copying it straight to the clipboard.
+- Right-click a thumbnail (or the rotate button) to rotate it clockwise; Option/Alt+right-click (or Option/Alt+click the rotate button) rotates counter-clockwise instead.
+- Card layout redesigned: rename/rotate and view/copy icon buttons now flank the name and dimensions directly, with a divider below, instead of a separate button row.
+- The image name uses a condensed sans-serif font ([Saira Condensed](https://github.com/Omnibus-Type/Saira)) and the dimensions use a monospace font ([Lilex](https://github.com/mishamyrt/Lilex)), both bundled under the SIL Open Font License.
+
+### Fixed
+- The image grid rebuilds every card from scratch on an OS light/dark theme change; this previously reset every image's selection state along with it. Selection now survives a theme-triggered rebuild.
+
 ### Changed
 - Extraction now uses PyMuPDF directly instead of shelling out to a separately-installed `mutool` binary. No more "mutool not found" screen, PATH lookups, or install instructions -- PyMuPDF is bundled with the app, so images are extracted straight from the PDF in-process, with mask pairing and CMYK JPEG handling behaving the same as before.
 - Relicensed from MIT to AGPL-3.0. PyMuPDF is dual-licensed under the AGPL-3.0 or a commercial license from Artifex; bundling it means ImgSnips's distribution now includes AGPL-licensed code, so the project is licensed under the AGPL-3.0 to match.
+- Reduced card padding and icon-button size to make room for a slightly larger image name.
 
 ### ToDo
-- Round 1
-  - Change default to none selected
-  - Shift+Click should work as expected
-  - double-click icon to preview
-  - double-click name to rename
-  - Add a copy button per image
-  - New layout per image:
-    |✏️  name   🔄|
-    |🔎  size   📑|
-    ---------------
-  - Right click image or rotate button to rotate clockwise
-    - Option/Alt+Click either to rotate counter-clockwise
 - Round 2
   - Allow user to change icon scale
   - Option to set background color instead of transparent
+  - Option to set image size constraints for saved files
   - When saving, prompt to confirm file overwriting
 - Round 3
   - Open two PDFs at once

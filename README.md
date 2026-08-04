@@ -48,9 +48,9 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 1. Install dev dependencies: `pipenv install --dev`
 2. Work around a pipenv issue where `packaging`/`setuptools` resolve into `Pipfile.lock` but don't actually land in the virtualenv, which otherwise breaks PyInstaller: `pipenv run pip install packaging setuptools`
 3. Build with PyInstaller, bundling the spinner and app icon assets:
-   - **macOS:** `pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py` (onedir, not onefile — PyInstaller deprecates combining `--onefile` with a `--windowed` .app bundle on macOS)
-   - **Linux:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py`
-   - **Windows:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py`
+   - **macOS:** `pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" main.py` (onedir, not onefile — PyInstaller deprecates combining `--onefile` with a `--windowed` .app bundle on macOS)
+   - **Linux:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" main.py`
+   - **Windows:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." --add-data "fonts;fonts" main.py`
 4. Find the executable in `dist/`.
 
 ## License
@@ -59,3 +59,9 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 ImgSnips bundles [PyMuPDF](https://pymupdf.readthedocs.io/), which is dual-licensed
 under the AGPL-3.0 or a commercial license from Artifex. Distributing ImgSnips means
 distributing PyMuPDF with it, so ImgSnips is licensed under the AGPL-3.0 to match.
+
+ImgSnips also bundles two fonts used in the image grid, both under the [SIL Open Font
+License 1.1](https://openfontlicense.org/) (license text included alongside each font
+in `fonts/`): [Saira Condensed](https://github.com/Omnibus-Type/Saira) by Héctor Gatti/
+Omnibus-Type, and [Lilex](https://github.com/mishamyrt/Lilex) by the Lilex Project
+Authors.

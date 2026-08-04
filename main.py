@@ -20,7 +20,7 @@ import shutil
 import tempfile
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
-from PyQt6.QtGui import QMovie, QPixmap, QCursor, QPalette, QColor, QIcon
+from PyQt6.QtGui import QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QFileDialog,
@@ -36,8 +36,20 @@ import pdf_extract as pe
 SCRIPT_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 SPINNER_PATH = os.path.join(SCRIPT_DIR, 'spinner.gif')
 ICON_PATH = os.path.join(SCRIPT_DIR, 'imgsnips.png')
+FONTS_DIR = os.path.join(SCRIPT_DIR, 'fonts')
 THUMB_SIZE = 160
 GRID_COLS = 4
+
+NAME_FONT_FAMILY = 'Saira Condensed'
+SIZE_FONT_FAMILY = 'Lilex'
+
+
+def load_bundled_fonts():
+    """Register the card labels' fonts with Qt before any window is built.
+    Falls back to the platform default silently if a font fails to load
+    (setFont on an unrecognized family just uses the closest match)."""
+    for fname in ('SairaCondensed-Medium.ttf', 'Lilex-Regular.ttf'):
+        QFontDatabase.addApplicationFont(os.path.join(FONTS_DIR, fname))
 
 
 def pil_to_pixmap(pil_img):
@@ -67,7 +79,9 @@ class ExtractWorker(QThread):
 
 
 class ClickableLabel(QLabel):
-    clicked = pyqtSignal()
+    clicked = pyqtSignal(bool)  # emits whether Shift was held
+    doubleClicked = pyqtSignal()
+    rotateRequested = pyqtSignal(bool)  # emits whether the rotation is clockwise
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -75,7 +89,31 @@ class ClickableLabel(QLabel):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self.clicked.emit(shift_held)
+        elif event.button() == Qt.MouseButton.RightButton:
+            clockwise = not (event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            self.rotateRequested.emit(clockwise)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+class IconButton(QPushButton):
+    """QPushButton that also reacts to a right-click (Alt+right-click for
+    the reverse direction), used for the rotate button's clockwise/
+    counter-clockwise gesture. Harmless no-op for buttons that don't
+    connect to rightClicked."""
+    rightClicked = pyqtSignal(bool)  # emits whether the rotation is clockwise
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            clockwise = not (event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            self.rightClicked.emit(clockwise)
+            return
         super().mousePressEvent(event)
 
 
@@ -129,6 +167,7 @@ class MainWindow(QMainWindow):
         self.tmpdir = None
         self.spinner_movie = None
         self.theme_colors = {}
+        self._selection_anchor_idx = None
         self._build_ui()
         self._center_on_screen(965, 800)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
@@ -167,6 +206,10 @@ class MainWindow(QMainWindow):
             'unselected_border': unselected_border.name(),
             'selected_bg': selected_bg.name(),
             'selected_border': selected_border.name(),
+            # A low-alpha white overlay lightens either the selected or
+            # unselected card background by the same subtle amount, rather
+            # than needing a separate fixed color per selection state.
+            'name_bg': 'rgba(255, 255, 255, 28)',
         }
 
     def _on_color_scheme_changed(self, _scheme):
@@ -307,6 +350,7 @@ class MainWindow(QMainWindow):
     def on_extract_finished(self, images):
         self.hide_spinner()
         self.images = images
+        self._selection_anchor_idx = None
         self.render_grid()
         self.stack.setCurrentIndex(1)
 
@@ -326,14 +370,14 @@ class MainWindow(QMainWindow):
         for idx, img in enumerate(self.images):
             row = idx // GRID_COLS
             col = idx % GRID_COLS
-            cell = self._build_cell(img, page_counter)
+            cell = self._build_cell(img, page_counter, idx)
             self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
             last_row = row
         # Soak up leftover vertical space in a phantom row so cards stay
         # compact at the top instead of stretching to fill the scroll area.
         self.grid_layout.setRowStretch(last_row + 1, 1)
 
-    def _build_cell(self, img, page_counter):
+    def _build_cell(self, img, page_counter, idx):
         meta = img['meta']
         pg = meta.get('page', '?')
         pg_str = f"{int(pg):03}" if isinstance(pg, int) else str(pg)
@@ -341,13 +385,17 @@ class MainWindow(QMainWindow):
         idx_str = f"{page_counter[pg_str]:02}"
         if not img.get('save_name'):
             img['save_name'] = f"pg{pg_str}-{idx_str}"
-        img['selected'] = True
+        # Rebuilt from scratch on every render_grid() call (e.g. on an OS
+        # theme change), so use setdefault rather than clobbering a
+        # selection the user already made.
+        img.setdefault('selected', False)
+        img['_idx'] = idx
 
         card = QFrame()
         card.setObjectName('imageCard')
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 10, 10, 8)
-        v.setSpacing(6)
+        v.setContentsMargins(6, 6, 6, 2)
+        v.setSpacing(4)
 
         thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
         pil_thumb = Image.open(thumb_path)
@@ -356,37 +404,66 @@ class MainWindow(QMainWindow):
         thumb_label.setPixmap(pil_to_pixmap(pil_thumb))
         thumb_label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
         thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        thumb_label.clicked.connect(lambda img=img: self.toggle_selected(img))
+        thumb_label.setToolTip('Click to select • double-click to preview • right-click to rotate')
+        thumb_label.clicked.connect(lambda shift_held, img=img: self.handle_thumb_clicked(img, shift_held))
+        thumb_label.doubleClicked.connect(lambda img=img: self.show_full_res(img))
+        thumb_label.rotateRequested.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
         v.addWidget(thumb_label, alignment=Qt.AlignmentFlag.AlignHCenter)
         img['_thumb_label'] = thumb_label
 
-        name_label = QLabel(img['save_name'])
-        name_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        name_label.setStyleSheet(f"color: {self.theme_colors['text']};")
-        v.addWidget(name_label)
+        info_grid = QGridLayout()
+        info_grid.setContentsMargins(0, 2, 0, 0)
+        info_grid.setHorizontalSpacing(3)
+        info_grid.setVerticalSpacing(1)
+        info_grid.setColumnStretch(1, 1)
+
+        rename_btn = self._make_icon_button('✏️', 'Rename', self.theme_colors['text'])
+        rename_btn.clicked.connect(lambda _, img=img: self.rename_image(img))
+        name_label = ClickableLabel(img['save_name'])
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_label.setFont(QFont(NAME_FONT_FAMILY, 13))
+        name_label.setStyleSheet(
+            f"color: {self.theme_colors['text']}; background: {self.theme_colors['name_bg']}; "
+            'padding: 1px 4px;'
+        )
+        name_label.setToolTip('Double-click to rename')
+        name_label.doubleClicked.connect(lambda img=img: self.rename_image(img))
+        rotate_btn = self._make_icon_button(
+            '\U0001F504', 'Rotate clockwise (Option/Alt+click for counter-clockwise)',
+            self.theme_colors['text'],
+        )
+        # Unlike the thumbnail's right-click gesture, either mouse button
+        # rotates the same way here -- only Option/Alt picks the direction,
+        # so there's nothing to remember about which button does what on
+        # the button itself.
+        rotate_btn.clicked.connect(lambda _, img=img: self.rotate_image(
+            img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        ))
+        rotate_btn.rightClicked.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
+        info_grid.addWidget(rename_btn, 0, 0)
+        info_grid.addWidget(name_label, 0, 1)
+        info_grid.addWidget(rotate_btn, 0, 2)
         img['_name_label'] = name_label
 
-        btn_row = QWidget()
-        btn_layout = QHBoxLayout(btn_row)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(4)
-
-        zoom_btn = self._make_icon_button('\U0001F50D', 'View full size', self.theme_colors['text'])
+        zoom_btn = self._make_icon_button('\U0001F50E', 'View full size', self.theme_colors['text'])
         zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
-        rename_btn = self._make_icon_button('✎', 'Rename', self.theme_colors['text'])
-        rename_btn.clicked.connect(lambda _, img=img: self.rename_image(img))
-        rotate_btn = self._make_icon_button('↻', 'Rotate', self.theme_colors['text'])
-        rotate_btn.clicked.connect(lambda _, img=img: self.rotate_image(img))
-        btn_layout.addWidget(zoom_btn)
-        btn_layout.addWidget(rename_btn)
-        btn_layout.addWidget(rotate_btn)
-        v.addWidget(btn_row, alignment=Qt.AlignmentFlag.AlignHCenter)
-
         dims_label = QLabel(f"{meta.get('width', '?')} x {meta.get('height', '?')}")
-        dims_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dims_label.setFont(QFont(SIZE_FONT_FAMILY, 10))
         dims_label.setStyleSheet(f"color: {self.theme_colors['secondary_text']};")
-        v.addWidget(dims_label)
+        copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
+        copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
+        info_grid.addWidget(zoom_btn, 1, 0)
+        info_grid.addWidget(dims_label, 1, 1)
+        info_grid.addWidget(copy_btn, 1, 2)
         img['_dims_label'] = dims_label
+
+        v.addLayout(info_grid)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {self.theme_colors['unselected_border']};")
+        v.addWidget(divider)
 
         img['_card'] = card
         self._apply_card_style(img)
@@ -394,12 +471,12 @@ class MainWindow(QMainWindow):
         return card
 
     def _make_icon_button(self, glyph, tooltip, color):
-        btn = QPushButton(glyph)
-        btn.setFixedSize(28, 28)
+        btn = IconButton(glyph)
+        btn.setFixedSize(22, 22)
         btn.setToolTip(tooltip)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setStyleSheet(
-            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 14px; border-radius: 4px; }}'
+            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 12px; border-radius: 4px; }}'
             'QPushButton:hover { background: rgba(127, 127, 127, 0.25); }'
         )
         return btn
@@ -418,9 +495,21 @@ class MainWindow(QMainWindow):
                 f"#imageCard {{ border: 1px solid {c['unselected_border']}; background: {c['unselected_bg']}; border-radius: 8px; }}"
             )
 
-    def toggle_selected(self, img):
-        img['selected'] = not img.get('selected', True)
-        self._apply_card_style(img)
+    def handle_thumb_clicked(self, img, shift_held):
+        idx = img['_idx']
+        if shift_held and self._selection_anchor_idx is not None:
+            # Range-select from the last plain-clicked image to this one,
+            # inclusive; the anchor itself doesn't move, so repeated
+            # shift-clicks extend/shrink relative to that original click.
+            lo, hi = sorted((self._selection_anchor_idx, idx))
+            for i in range(lo, hi + 1):
+                other = self.images[i]
+                other['selected'] = True
+                self._apply_card_style(other)
+        else:
+            img['selected'] = not img.get('selected', False)
+            self._apply_card_style(img)
+            self._selection_anchor_idx = idx
 
     def select_all(self):
         for img in self.images:
@@ -441,10 +530,11 @@ class MainWindow(QMainWindow):
             img['save_name'] = new_name
             img['_name_label'].setText(new_name)
 
-    def rotate_image(self, img):
+    def rotate_image(self, img, clockwise=True):
+        transpose = Image.Transpose.ROTATE_270 if clockwise else Image.Transpose.ROTATE_90
         try:
             with Image.open(img['orig_path']) as im:
-                rotated = im.transpose(Image.Transpose.ROTATE_270)  # visually clockwise
+                rotated = im.transpose(transpose)
                 rotated.save(img['orig_path'])
             with Image.open(img['orig_path']) as im:
                 trimmed = pe.trim_whitespace(im)
@@ -470,6 +560,13 @@ class MainWindow(QMainWindow):
             return
         dlg = FullImageDialog(self, orig_path, img['meta'], img['filename'])
         dlg.exec()
+
+    def copy_image(self, img):
+        try:
+            with Image.open(img['orig_path']) as im:
+                QApplication.clipboard().setPixmap(pil_to_pixmap(im))
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Could not copy image: {e}')
 
     # --- Saving ---
     def save_selected(self):
@@ -519,6 +616,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(ICON_PATH))
+    load_bundled_fonts()
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

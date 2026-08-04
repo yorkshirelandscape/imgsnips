@@ -30,7 +30,7 @@ jobs:
         # onedir, not onefile: PyInstaller deprecates --onefile combined with
         # --windowed .app bundles on macOS (a .app can't be a single file) and
         # will make it a hard error in v7.0.
-        run: pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py
+        run: pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" main.py
       - name: Remove redundant loose build
         # --windowed on macOS produces both a bare dist/ImgSnips/ onedir
         # folder and a .app bundle wrapping its own copy of the same contents.
@@ -87,7 +87,7 @@ jobs:
         # so this isn't specific to our Pipfile.
         run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." --add-data "fonts;fonts" main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6
@@ -124,7 +124,7 @@ jobs:
         # so this isn't specific to our Pipfile.
         run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6
