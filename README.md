@@ -53,11 +53,12 @@ A modern, user-friendly tool for extracting and saving images from PDF files usi
 
 ### Build your own executable
 1. Install dev dependencies: `pipenv install --dev`
-2. Build with PyInstaller, bundling the spinner and app icon assets:
+2. Work around a pipenv issue where `packaging`/`setuptools` resolve into `Pipfile.lock` but don't actually land in the virtualenv, which otherwise breaks PyInstaller: `pipenv run pip install packaging setuptools`
+3. Build with PyInstaller, bundling the spinner and app icon assets:
    - **macOS:** `pipenv run pyinstaller --windowed --name ImgSnips --icon packaging/icon/imgsnips.icns --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py` (onedir, not onefile — PyInstaller deprecates combining `--onefile` with a `--windowed` .app bundle on macOS)
    - **Linux:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py`
    - **Windows:** `pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py`
-3. Find the executable in `dist/`.
+4. Find the executable in `dist/`.
 
 ## License
 [MIT License](LICENSE)

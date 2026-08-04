@@ -16,6 +16,16 @@ jobs:
         run: pip install pipenv
       - name: Install dependencies
         run: pipenv install --dev
+      - name: Work around pipenv not actually installing packaging/setuptools
+        # `pipenv install --dev` (and even `pipenv sync --dev`) resolves
+        # packaging/setuptools into Pipfile.lock correctly but silently
+        # leaves them out of the venv's site-packages, which breaks
+        # PyInstaller (it imports packaging.requirements during its own
+        # startup). A direct pip install into the same venv does put them
+        # there. Reproduced independently of this project (same failure on
+        # a from-scratch pyZoLoaner checkout with today's pipenv/PyInstaller),
+        # so this isn't specific to our Pipfile.
+        run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
         # onedir, not onefile: PyInstaller deprecates --onefile combined with
         # --windowed .app bundles on macOS (a .app can't be a single file) and
@@ -66,6 +76,16 @@ jobs:
         run: pip install pipenv
       - name: Install dependencies
         run: pipenv install --dev
+      - name: Work around pipenv not actually installing packaging/setuptools
+        # `pipenv install --dev` (and even `pipenv sync --dev`) resolves
+        # packaging/setuptools into Pipfile.lock correctly but silently
+        # leaves them out of the venv's site-packages, which breaks
+        # PyInstaller (it imports packaging.requirements during its own
+        # startup). A direct pip install into the same venv does put them
+        # there. Reproduced independently of this project (same failure on
+        # a from-scratch pyZoLoaner checkout with today's pipenv/PyInstaller),
+        # so this isn't specific to our Pipfile.
+        run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
         run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." main.py
 
@@ -93,6 +113,16 @@ jobs:
         run: pip install pipenv
       - name: Install dependencies
         run: pipenv install --dev
+      - name: Work around pipenv not actually installing packaging/setuptools
+        # `pipenv install --dev` (and even `pipenv sync --dev`) resolves
+        # packaging/setuptools into Pipfile.lock correctly but silently
+        # leaves them out of the venv's site-packages, which breaks
+        # PyInstaller (it imports packaging.requirements during its own
+        # startup). A direct pip install into the same venv does put them
+        # there. Reproduced independently of this project (same failure on
+        # a from-scratch pyZoLoaner checkout with today's pipenv/PyInstaller),
+        # so this isn't specific to our Pipfile.
+        run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
         run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." main.py
 
