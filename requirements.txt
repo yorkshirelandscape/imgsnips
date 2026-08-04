@@ -1,3 +1,4 @@
 -i https://pypi.org/simple
 pillow==11.2.1; python_version >= '3.9'
 PyQt6
+PyMuPDF
