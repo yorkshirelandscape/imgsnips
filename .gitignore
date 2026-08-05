@@ -8,3 +8,7 @@ input
 build/
 dist/
 *.spec
+# ...except our own, which now carries deliberate build config (the
+# macOS Info.plist's CFBundleDocumentTypes PDF association) rather than
+# just being PyInstaller's throwaway generated-from-CLI-args output.
+!ImgSnips.spec

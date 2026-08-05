@@ -8,13 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Opening a second (or third, etc.) PDF now adds its images to the grid alongside whatever's already open, instead of replacing it -- each opened PDF keeps its own extracted files alive until the app closes. Default save names only get a source-document prefix (e.g. `some-file-pg001-01`) once more than one document is actually loaded, so the common single-PDF case looks exactly as it always has.
+- ImgSnips now opens a PDF handed to it directly -- as a command-line argument, or (macOS) via Finder's "Open With" on an already-running instance. The macOS build now declares itself a PDF viewer (`CFBundleDocumentTypes`, alternate handler rank) so it shows up in that "Open With" list in the first place, rather than just being able to handle a file if it somehow got one.
 
 ### ToDo
 - Round 2
   - Option to set background color instead of transparent
   - When saving, prompt to confirm file overwriting
-- Round 3
-  - Appear in context menu's Open with... list
 
 ## [1.1.0] - 2026-08-04
 

@@ -19,7 +19,7 @@ import sys
 import shutil
 import tempfile
 
-from PyQt6.QtCore import Qt, QThread, QTimer, QSize, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QThread, QTimer, QSize, QEvent, pyqtSignal, QUrl
 from PyQt6.QtGui import (
     QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
 )
@@ -77,6 +77,21 @@ def emoji_icon(glyph, point_size):
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
     painter.end()
     return QIcon(pixmap), QSize(side, side)
+
+
+class ImgSnipsApp(QApplication):
+    """Subclassed only to catch QEvent.Type.FileOpen. On macOS, launching
+    an already-running app via Finder's "Open With" arrives as this Qt
+    event rather than a fresh process with a command-line argument (that
+    only happens for a cold launch) -- a plain QApplication silently drops
+    it, since nothing asks for it by default."""
+    fileOpenRequested = pyqtSignal(str)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.FileOpen:
+            self.fileOpenRequested.emit(event.file())
+            return True
+        return super().event(event)
 
 
 class ExtractWorker(QThread):
@@ -482,6 +497,14 @@ class MainWindow(QMainWindow):
         pdf_path, _ = QFileDialog.getOpenFileName(self, 'Select PDF file', '', 'PDF files (*.pdf)')
         if not pdf_path:
             return
+        self.open_pdf_path(pdf_path)
+
+    def open_pdf_path(self, pdf_path):
+        """Extract and load a specific PDF given its path directly -- shared
+        by the Open button's file dialog, a path passed on the command
+        line, and the OS handing us a file to open (double-click, drag onto
+        the Dock icon, or a live "Open With" request while already
+        running)."""
         self.show_spinner()
         outdir = pe.make_extract_dir()
         self.tmpdirs.append(outdir)
@@ -843,11 +866,24 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    app = QApplication(sys.argv)
+    app = ImgSnipsApp(sys.argv)
     app.setWindowIcon(QIcon(ICON_PATH))
     load_bundled_fonts()
     win = MainWindow()
+    app.fileOpenRequested.connect(win.open_pdf_path)
     win.show()
+    # A file-association launch (on any platform, including macOS -- the
+    # FileOpen event above only covers a fresh "Open With" request sent to
+    # an already-running instance, not a cold launch) or plain CLI usage
+    # passes the file as a normal argument to a fresh process. Deferred via
+    # singleShot rather than called inline: starting the extraction
+    # QThread before the event loop is actually running (app.exec() below)
+    # means its cross-thread finished_ok signal has no running loop to be
+    # queued against yet.
+    for arg in sys.argv[1:]:
+        if arg.lower().endswith('.pdf') and os.path.isfile(arg):
+            QTimer.singleShot(0, lambda arg=arg: win.open_pdf_path(arg))
+            break
     sys.exit(app.exec())
 
 
