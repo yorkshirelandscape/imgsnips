@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ToDo
+- Round 2
+  - Option to set background color instead of transparent
+  - When saving, prompt to confirm file overwriting
+- Round 3
+  - Open two PDFs at once
+  - Appear in context menu's Open with... list
+
+## [1.1.0] - 2026-08-04
+
 ### Added
 - Images start unselected instead of all-selected by default.
 - Shift+click an image to range-select from the last-clicked image to it.
@@ -14,24 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Right-click a thumbnail (or the rotate button) to rotate it clockwise; Option/Alt+right-click (or Option/Alt+click the rotate button) rotates counter-clockwise instead.
 - Card layout redesigned: rename/rotate and view/copy icon buttons now flank the name and dimensions directly, with a divider below, instead of a separate button row.
 - The image name uses a condensed sans-serif font ([Saira Condensed](https://github.com/Omnibus-Type/Saira)) and the dimensions use a monospace font ([Lilex](https://github.com/mishamyrt/Lilex)), both bundled under the SIL Open Font License.
+- A Resize control (toolbar's Side/Length pair) lets saved images be constrained to a given pixel length -- by long side, short side, width, or height -- before writing them out; aspect ratio is preserved and images are only ever scaled down, never up.
+- An icon-size slider (toolbar, far right, Apple Photos-style) scales thumbnails and their cards up or down; the grid reflows its column count to fit the window at any size or icon setting.
 
 ### Fixed
 - The image grid rebuilds every card from scratch on an OS light/dark theme change; this previously reset every image's selection state along with it. Selection now survives a theme-triggered rebuild.
+- The icon-size slider stopped growing thumbnails past 160px, since cards were rendered from a cached thumbnail file generated at a fixed 160x160 cap during extraction, and PIL's `.thumbnail()` only ever shrinks, never enlarges. The cache is now generated (and regenerated on rotate) at the slider's actual maximum instead of a fixed 160px, so images with enough native resolution genuinely fill a larger card.
 
 ### Changed
 - Extraction now uses PyMuPDF directly instead of shelling out to a separately-installed `mutool` binary. No more "mutool not found" screen, PATH lookups, or install instructions -- PyMuPDF is bundled with the app, so images are extracted straight from the PDF in-process, with mask pairing and CMYK JPEG handling behaving the same as before.
-- Relicensed from MIT to AGPL-3.0. PyMuPDF is dual-licensed under the AGPL-3.0 or a commercial license from Artifex; bundling it means ImgSnips's distribution now includes AGPL-licensed code, so the project is licensed under the AGPL-3.0 to match.
-- Reduced card padding and icon-button size to make room for a slightly larger image name.
-
-### ToDo
-- Round 2
-  - Allow user to change icon scale
-  - Option to set background color instead of transparent
-  - Option to set image size constraints for saved files
-  - When saving, prompt to confirm file overwriting
-- Round 3
-  - Open two PDFs at once
-  - Appear in context menu's Open with... list
+- Reduced card padding and icon-button size to make room for a slightly larger image name; card bottom padding trimmed further since.
+- Toolbar reorganized into stacked two-row groups to fit the icon-size slider and a two-line Resize control without overflowing: "Open PDF"/"Save Selected" shortened to "Open"/"Save" and stacked together, "Select All"/"Select None" collapsed to a "SELECT:" label (bold, larger, vertically centered) with stacked "All"/"None" buttons, PNG/WEBP format radios stacked next to Open/Save, and Resize split into a "Side:" (mode) row above a "Length:" (pixel value) row -- the Side dropdown and Length spinbox are held to the same width.
+- Toolbar text now uses the same condensed sans as the image names (Saira Condensed) instead of the platform default; the Length input uses the monospace font (Lilex) that the dimension labels use, since it's a number rather than a word.
+- Open (both the toolbar button and the big centered one on the empty-state screen) recolored pale yellow (previously the same pale blue as None); None and All swapped order (None on top) and given rounded corners and a blue color scheme matching Open/Save's style, with All more saturated than None since it's the more consequential of the two. The Length value is now right-aligned like a typical numeric field.
+- Toolbar font bumped from 13pt to 17pt (SELECT: 16pt to 20pt) for legibility. Button padding and the spacing between each stacked pair (Open/Save, PNG/WEBP, None/All, Side/Length) were both trimmed down afterward to keep the buttons and their layout as compact as before the font bump -- only the text itself was meant to grow. The folder/save glyphs on Open/Save are now rendered as fixed-size icons rather than living in the button's text, so they no longer scale up along with it.
 
 ## [1.0.0] - 2026-08-03
 > **License correction (2026-08-04):** originally published under the MIT License, but bundling GPL-3.0-only PyQt6 meant the distributed application was always bound by GPLv3 terms regardless of that label. Retroactively relicensed under the AGPL-3.0, matching the license used going forward.

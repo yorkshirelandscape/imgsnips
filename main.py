@@ -19,12 +19,15 @@ import sys
 import shutil
 import tempfile
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QUrl
-from PyQt6.QtGui import QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase
+from PyQt6.QtCore import Qt, QThread, QTimer, QSize, pyqtSignal, QUrl
+from PyQt6.QtGui import (
+    QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
+)
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QFileDialog,
     QMessageBox, QRadioButton, QButtonGroup, QStackedWidget, QDialog, QInputDialog,
+    QComboBox, QSpinBox, QSlider,
 )
 from PIL import Image
 from PIL.ImageQt import ImageQt
@@ -37,8 +40,12 @@ SCRIPT_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))
 SPINNER_PATH = os.path.join(SCRIPT_DIR, 'spinner.gif')
 ICON_PATH = os.path.join(SCRIPT_DIR, 'imgsnips.png')
 FONTS_DIR = os.path.join(SCRIPT_DIR, 'fonts')
-THUMB_SIZE = 160
-GRID_COLS = 4
+DEFAULT_THUMB_SIZE = 160
+MIN_THUMB_SIZE = 80
+# Can't exceed the cached thumbnail's own resolution -- PIL's thumbnail()
+# only ever shrinks, so anything past this would just center a
+# not-actually-bigger image in a bigger box instead of scaling it up.
+MAX_THUMB_SIZE = pe.THUMB_CACHE_SIZE
 
 NAME_FONT_FAMILY = 'Saira Condensed'
 SIZE_FONT_FAMILY = 'Lilex'
@@ -54,6 +61,22 @@ def load_bundled_fonts():
 
 def pil_to_pixmap(pil_img):
     return QPixmap.fromImage(ImageQt(pil_img.convert('RGBA')))
+
+
+def emoji_icon(glyph, point_size):
+    """Render a glyph as a fixed-size QIcon rather than embedding it in a
+    button's text, so bumping the button's font size (for legibility)
+    doesn't also blow up the emoji -- the two need independent sizing."""
+    font = QFont()
+    font.setPointSize(point_size)
+    side = QFontMetrics(font).height()
+    pixmap = QPixmap(side, side)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+    painter.end()
+    return QIcon(pixmap), QSize(side, side)
 
 
 class ExtractWorker(QThread):
@@ -168,9 +191,27 @@ class MainWindow(QMainWindow):
         self.spinner_movie = None
         self.theme_colors = {}
         self._selection_anchor_idx = None
+        self.thumb_size = DEFAULT_THUMB_SIZE
+        self._grid_cols = None
+        # Recomputing the column count on every intermediate resize event
+        # (fired continuously while a window edge is dragged) would rebuild
+        # every card several times a second; debounce to the last event.
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.timeout.connect(self._maybe_relayout_grid)
         self._build_ui()
         self._center_on_screen(965, 800)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout_timer.start(120)
+
+    def _maybe_relayout_grid(self):
+        if self.stack.currentIndex() != 1 or not self.images:
+            return
+        if self._compute_grid_cols() != self._grid_cols:
+            self.render_grid()
 
     def _is_dark_mode(self):
         scheme = QApplication.instance().styleHints().colorScheme()
@@ -223,41 +264,163 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         toolbar = QWidget()
+        # Widgets added to tb_layout (directly or via a nested layout) all
+        # end up parented to `toolbar`, so setting its font here cascades
+        # to everything below -- only the Length spinbox overrides this
+        # with the numeric/monospace font instead.
+        toolbar.setFont(QFont(NAME_FONT_FAMILY, 17))
         tb_layout = QHBoxLayout(toolbar)
-        tb_layout.setContentsMargins(8, 5, 12, 5)
+        tb_layout.setContentsMargins(10, 6, 12, 6)
+        tb_layout.setSpacing(14)
 
-        self.btn_open = QPushButton('\U0001F4C2 Open PDF')
+        # --- Open / Save, stacked ---
+        self.btn_open = QPushButton(' Open')
+        # A stylesheet on a widget resets its font to the platform default
+        # unless the stylesheet itself declares font-family/font-size, so
+        # the toolbar-wide setFont() above wouldn't reach these two buttons
+        # without spelling the font out here too. Padding trimmed from the
+        # original 4px/12px to offset the bigger font -- otherwise the
+        # button itself grows along with the text instead of just the text
+        # becoming more legible.
         self.btn_open.setStyleSheet(
-            'background:#bbdefb; color:#0d47a1; font-weight:600; border-radius:8px; padding:4px 12px;'
+            'background:#fff9c4; color:#6d4c00; font-weight:600; font-family:"Saira Condensed"; '
+            'font-size:17pt; border-radius:8px; padding:0px 10px;'
         )
+        # The folder/save glyphs are icons, not text -- rendered at their
+        # original fixed size so bumping the button's font size doesn't
+        # blow them up along with the words.
+        open_icon, open_icon_size = emoji_icon('\U0001F4C2', 13)
+        self.btn_open.setIcon(open_icon)
+        self.btn_open.setIconSize(open_icon_size)
         self.btn_open.clicked.connect(self.open_pdf)
-        tb_layout.addWidget(self.btn_open)
 
-        tb_layout.addStretch(1)
+        self.btn_save = QPushButton(' Save')
+        self.btn_save.setStyleSheet(
+            'background:#43a047; font-family:"Saira Condensed"; font-size:17pt; '
+            'border-radius:8px; padding:0px 10px;'
+        )
+        save_icon, save_icon_size = emoji_icon('\U0001F4BE', 13)
+        self.btn_save.setIcon(save_icon)
+        self.btn_save.setIconSize(save_icon_size)
+        self.btn_save.clicked.connect(self.save_selected)
 
-        self.btn_all = QPushButton('Select All')
-        self.btn_all.clicked.connect(self.select_all)
-        tb_layout.addWidget(self.btn_all)
+        open_save_col = QVBoxLayout()
+        open_save_col.setSpacing(2)
+        open_save_col.addWidget(self.btn_open)
+        open_save_col.addWidget(self.btn_save)
+        tb_layout.addLayout(open_save_col)
 
-        self.btn_none = QPushButton('Select None')
-        self.btn_none.clicked.connect(self.select_none)
-        tb_layout.addWidget(self.btn_none)
+        # A bit more breathing room here than the toolbar's general 14px
+        # item spacing, so the Open/Save actions read as distinct from the
+        # PNG/WEBP format choice next to them.
+        tb_layout.addSpacing(10)
 
-        tb_layout.addStretch(1)
-
+        # --- PNG / WEBP, stacked ---
         self.rb_png = QRadioButton('PNG')
         self.rb_png.setChecked(True)
         self.rb_webp = QRadioButton('WEBP')
         fmt_group = QButtonGroup(self)
         fmt_group.addButton(self.rb_png)
         fmt_group.addButton(self.rb_webp)
-        tb_layout.addWidget(self.rb_png)
-        tb_layout.addWidget(self.rb_webp)
 
-        self.btn_save = QPushButton('\U0001F4BE Save Selected')
-        self.btn_save.setStyleSheet('background:#43a047; border-radius:8px; padding:4px 12px;')
-        self.btn_save.clicked.connect(self.save_selected)
-        tb_layout.addWidget(self.btn_save)
+        fmt_col = QVBoxLayout()
+        fmt_col.setSpacing(2)
+        fmt_col.addWidget(self.rb_png)
+        fmt_col.addWidget(self.rb_webp)
+        tb_layout.addLayout(fmt_col)
+
+        tb_layout.addStretch(1)
+
+        # A plain widget/layout added straight to a QHBoxLayout is centered
+        # on the cross-axis by default (it doesn't expand to the row's
+        # height), so this sits vertically centered between the stacked
+        # pairs on either side without any extra alignment plumbing.
+        select_label = QLabel('SELECT:')
+        select_font = QFont(NAME_FONT_FAMILY, 20)
+        select_font.setBold(True)
+        select_label.setFont(select_font)
+        tb_layout.addWidget(select_label)
+
+        # --- All / None, stacked (None on top, All below) ---
+        self.btn_all = QPushButton('All')
+        self.btn_all.setStyleSheet(
+            'background:#1976d2; color:#ffffff; font-weight:600; font-family:"Saira Condensed"; '
+            'font-size:17pt; border-radius:8px; padding:0px 10px;'
+        )
+        self.btn_all.clicked.connect(self.select_all)
+        self.btn_none = QPushButton('None')
+        self.btn_none.setStyleSheet(
+            'background:#bbdefb; color:#0d47a1; font-family:"Saira Condensed"; '
+            'font-size:17pt; border-radius:8px; padding:0px 10px;'
+        )
+        self.btn_none.clicked.connect(self.select_none)
+
+        select_col = QVBoxLayout()
+        select_col.setSpacing(2)
+        select_col.addWidget(self.btn_none)
+        select_col.addWidget(self.btn_all)
+        tb_layout.addLayout(select_col)
+
+        tb_layout.addStretch(1)
+
+        # --- Resize: Side (mode) row above Length (pixel value) row ---
+        self.combo_resize = QComboBox()
+        self.combo_resize.addItem('None', 'none')
+        self.combo_resize.addItem('Long side', 'long')
+        self.combo_resize.addItem('Short side', 'short')
+        self.combo_resize.addItem('Width', 'width')
+        self.combo_resize.addItem('Height', 'height')
+        self.combo_resize.currentIndexChanged.connect(self._on_resize_mode_changed)
+
+        side_row = QHBoxLayout()
+        side_row.setSpacing(6)
+        side_row.addWidget(QLabel('Side:'))
+        side_row.addWidget(self.combo_resize)
+
+        self.spin_resize_length = QSpinBox()
+        self.spin_resize_length.setRange(1, 20000)
+        self.spin_resize_length.setValue(2000)
+        self.spin_resize_length.setSuffix(' px')
+        self.spin_resize_length.setEnabled(False)
+        self.spin_resize_length.setFont(QFont(SIZE_FONT_FAMILY, 17))
+        self.spin_resize_length.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        length_row = QHBoxLayout()
+        length_row.setSpacing(6)
+        length_row.addWidget(QLabel('Length:'))
+        length_row.addWidget(self.spin_resize_length)
+
+        # The two rows' labels ("Side:"/"Length:") are close enough in
+        # width to line up on their own; match the controls explicitly so
+        # the dropdown and spinbox share a common right edge too.
+        control_width = max(self.combo_resize.sizeHint().width(), self.spin_resize_length.sizeHint().width())
+        self.combo_resize.setFixedWidth(control_width)
+        self.spin_resize_length.setFixedWidth(control_width)
+
+        resize_col = QVBoxLayout()
+        resize_col.setSpacing(2)
+        resize_col.addLayout(side_row)
+        resize_col.addLayout(length_row)
+        tb_layout.addLayout(resize_col)
+
+        tb_layout.addStretch(1)
+
+        # --- Icon-size slider, vertically centered, Apple Photos-style ---
+        size_row = QHBoxLayout()
+        size_row.setSpacing(6)
+        small_icon = QLabel('\U0001F5BC')
+        small_icon.setStyleSheet('font-size: 9px;')
+        size_row.addWidget(small_icon)
+        self.slider_icon_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_icon_size.setRange(MIN_THUMB_SIZE, MAX_THUMB_SIZE)
+        self.slider_icon_size.setValue(self.thumb_size)
+        self.slider_icon_size.setFixedWidth(140)
+        self.slider_icon_size.valueChanged.connect(self._on_icon_size_changed)
+        size_row.addWidget(self.slider_icon_size)
+        large_icon = QLabel('\U0001F5BC')
+        large_icon.setStyleSheet('font-size: 18px;')
+        size_row.addWidget(large_icon)
+        tb_layout.addLayout(size_row)
 
         self.stack = QStackedWidget()
 
@@ -267,7 +430,7 @@ class MainWindow(QMainWindow):
         big_open_btn = QPushButton('\U0001F4C2  Open PDF')
         big_open_btn.setFixedSize(240, 80)
         big_open_btn.setStyleSheet(
-            'font-size: 18px; background: #bbdefb; color: #0d47a1; font-weight: 600; border-radius: 8px;'
+            'font-size: 18px; background: #fff9c4; color: #6d4c00; font-weight: 600; border-radius: 8px;'
         )
         big_open_btn.clicked.connect(self.open_pdf)
         hcenter = QHBoxLayout()
@@ -292,6 +455,7 @@ class MainWindow(QMainWindow):
         self.grid_layout.setVerticalSpacing(18)
         self.scroll_area.setWidget(self.grid_container)
         grid_page_layout.addWidget(self.scroll_area)
+
         self.stack.addWidget(grid_page)  # index 1
 
         # --- Spinner page ---
@@ -362,20 +526,42 @@ class MainWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
 
+    def _compute_grid_cols(self):
+        viewport_width = self.scroll_area.viewport().width()
+        if viewport_width <= 0:
+            return 1
+        left, _, right, _ = self.grid_layout.getContentsMargins()
+        spacing = self.grid_layout.horizontalSpacing()
+        # A card's rendered width is its thumbnail plus ~14px of its own
+        # padding/border, floored around 130px -- below that the info row
+        # (rename/rotate icons flanking the name) needs more room than the
+        # thumbnail itself, so shrinking further doesn't shrink the card.
+        card_width = max(self.thumb_size + 14, 130)
+        available = viewport_width - left - right
+        cols = (available + spacing) // (card_width + spacing)
+        return max(1, int(cols))
+
     def render_grid(self):
         self.theme_colors = self._compute_theme_colors()
         self.clear_grid()
+        cols = self._compute_grid_cols()
+        self._grid_cols = cols
         page_counter = {}
         last_row = 0
         for idx, img in enumerate(self.images):
-            row = idx // GRID_COLS
-            col = idx % GRID_COLS
+            row = idx // cols
+            col = idx % cols
             cell = self._build_cell(img, page_counter, idx)
             self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
             last_row = row
         # Soak up leftover vertical space in a phantom row so cards stay
         # compact at the top instead of stretching to fill the scroll area.
         self.grid_layout.setRowStretch(last_row + 1, 1)
+
+    def _on_icon_size_changed(self, value):
+        self.thumb_size = value
+        if self.images:
+            self.render_grid()
 
     def _build_cell(self, img, page_counter, idx):
         meta = img['meta']
@@ -394,15 +580,15 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName('imageCard')
         v = QVBoxLayout(card)
-        v.setContentsMargins(6, 6, 6, 2)
+        v.setContentsMargins(6, 6, 6, 1)
         v.setSpacing(4)
 
         thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
         pil_thumb = Image.open(thumb_path)
-        pil_thumb.thumbnail((THUMB_SIZE, THUMB_SIZE))
+        pil_thumb.thumbnail((self.thumb_size, self.thumb_size))
         thumb_label = ClickableLabel()
         thumb_label.setPixmap(pil_to_pixmap(pil_thumb))
-        thumb_label.setFixedSize(THUMB_SIZE, THUMB_SIZE)
+        thumb_label.setFixedSize(self.thumb_size, self.thumb_size)
         thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         thumb_label.setToolTip('Click to select • double-click to preview • right-click to rotate')
         thumb_label.clicked.connect(lambda shift_held, img=img: self.handle_thumb_clicked(img, shift_held))
@@ -521,6 +707,9 @@ class MainWindow(QMainWindow):
             img['selected'] = False
             self._apply_card_style(img)
 
+    def _on_resize_mode_changed(self):
+        self.spin_resize_length.setEnabled(self.combo_resize.currentData() != 'none')
+
     def rename_image(self, img):
         new_name, ok = QInputDialog.getText(self, 'Rename Image', 'File name:', text=img['save_name'])
         if not ok:
@@ -539,7 +728,7 @@ class MainWindow(QMainWindow):
             with Image.open(img['orig_path']) as im:
                 trimmed = pe.trim_whitespace(im)
                 thumb = trimmed.copy()
-            thumb.thumbnail((THUMB_SIZE, THUMB_SIZE))
+            thumb.thumbnail((pe.THUMB_CACHE_SIZE, pe.THUMB_CACHE_SIZE))
             thumb.save(img['thumb_path'], 'PNG')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Could not rotate image: {e}')
@@ -569,6 +758,27 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'Error', f'Could not copy image: {e}')
 
     # --- Saving ---
+    @staticmethod
+    def _apply_resize(pil_img, mode, length):
+        w, h = pil_img.size
+        if mode == 'none' or w == 0 or h == 0:
+            return pil_img
+        if mode == 'long':
+            current = max(w, h)
+        elif mode == 'short':
+            current = min(w, h)
+        elif mode == 'width':
+            current = w
+        elif mode == 'height':
+            current = h
+        else:
+            return pil_img
+        if current <= length:
+            return pil_img
+        scale = length / current
+        new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        return pil_img.resize(new_size, Image.Resampling.LANCZOS)
+
     def save_selected(self):
         if not self.tmpdir or not os.path.exists(self.tmpdir):
             QMessageBox.critical(self, 'No Images', 'No images to save. Please open a PDF first.')
@@ -581,6 +791,8 @@ class MainWindow(QMainWindow):
         if not outdir:
             return
         export_fmt = 'WEBP' if self.rb_webp.isChecked() else 'PNG'
+        resize_mode = self.combo_resize.currentData()
+        resize_length = self.spin_resize_length.value()
         kept = 0
         name_counts = {}
         for img in selected:
@@ -594,6 +806,7 @@ class MainWindow(QMainWindow):
             out_path = os.path.join(outdir, f"{name}.{export_fmt.lower()}")
             try:
                 with Image.open(img['orig_path']) as pil_img:
+                    pil_img = self._apply_resize(pil_img, resize_mode, resize_length)
                     pil_img.save(out_path, export_fmt)
                 kept += 1
             except Exception as e:

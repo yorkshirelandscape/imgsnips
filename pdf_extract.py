@@ -21,6 +21,12 @@ import hashlib
 import pymupdf
 from PIL import Image, ImageChops
 
+# Cached thumbnails are generated once at this size and only ever downscaled
+# for display from there; it must cover the UI's largest selectable icon
+# size (main.py's MAX_THUMB_SIZE) so the icon-size slider has real pixels to
+# scale up to instead of upscaling a smaller cached copy.
+THUMB_CACHE_SIZE = 280
+
 
 def canonical_png_path(img_dir, obj_num):
     return os.path.join(img_dir, f"image-{obj_num:04d}.png")
@@ -185,7 +191,7 @@ def extract_images(pdf_path, outdir):
     if not img_files:
         return []
 
-    # Thumbnails (trimmed + capped to 160x160).
+    # Thumbnails (trimmed + capped to THUMB_CACHE_SIZE).
     for img in img_files:
         orig_path = img['orig_path']
         thumb_path = img['thumb_path']
@@ -194,7 +200,7 @@ def extract_images(pdf_path, outdir):
         try:
             with Image.open(orig_path) as im:
                 im_trimmed = trim_whitespace(im)
-                im_trimmed.thumbnail((160, 160))
+                im_trimmed.thumbnail((THUMB_CACHE_SIZE, THUMB_CACHE_SIZE))
                 im_trimmed.save(thumb_path, 'PNG')
         except Exception as e:
             print(f"[WARN] Failed to generate thumbnail for {orig_path}: {e}")
