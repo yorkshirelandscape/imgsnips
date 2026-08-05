@@ -19,6 +19,7 @@ import os
 import io
 import hashlib
 import tempfile
+import threading
 import pymupdf
 from PIL import Image, ImageChops
 
@@ -27,6 +28,16 @@ from PIL import Image, ImageChops
 # size (main.py's MAX_THUMB_SIZE) so the icon-size slider has real pixels to
 # scale up to instead of upscaling a smaller cached copy.
 THUMB_CACHE_SIZE = 280
+
+# MuPDF (the C library PyMuPDF wraps) isn't thread-safe for concurrent use
+# and its own docs call for external locking. ImgSnips runs extraction on a
+# background thread so opening a PDF doesn't freeze the UI; a file
+# enumerated during extraction was intermittently found missing moments
+# later, especially when a second extraction started shortly after the
+# first. This serializes every call into PyMuPDF across worker threads --
+# there's no throughput reason to ever run two extractions genuinely in
+# parallel here, so the cost of serializing them is free.
+_pymupdf_lock = threading.Lock()
 
 
 def canonical_png_path(img_dir, obj_num):
@@ -148,31 +159,32 @@ def extract_images(pdf_path, outdir):
     masks straight to canonical PNGs -> thumbnails -> exact + perceptual
     dedup. Returns a list of image dicts:
     {filename, meta, orig_path, thumb_path, save_name}."""
-    doc = pymupdf.open(pdf_path)
-    try:
-        images = enumerate_images(doc)
-        if not images:
-            return []
+    with _pymupdf_lock:
+        doc = pymupdf.open(pdf_path)
+        try:
+            images = enumerate_images(doc)
+            if not images:
+                return []
 
-        img_files = []
-        for img in images:
-            obj_num = img['obj_num']
-            try:
-                orig_path = extract_and_normalize(doc, outdir, img)
-            except Exception as e:
-                # One image object in a shape/colorspace we can't decode
-                # shouldn't take down every other image in the file with it.
-                print(f"[WARN] Skipping image object {obj_num}, could not decode: {e}")
-                continue
-            img_files.append({
-                'filename': os.path.basename(orig_path),
-                'meta': {k: img[k] for k in ('page', 'obj_num', 'width', 'height')},
-                'orig_path': orig_path,
-                'thumb_path': os.path.join(outdir, f"thumb-{obj_num:04d}.png"),
-                'save_name': None,
-            })
-    finally:
-        doc.close()
+            img_files = []
+            for img in images:
+                obj_num = img['obj_num']
+                try:
+                    orig_path = extract_and_normalize(doc, outdir, img)
+                except Exception as e:
+                    # One image object in a shape/colorspace we can't decode
+                    # shouldn't take down every other image in the file with it.
+                    print(f"[WARN] Skipping image object {obj_num}, could not decode: {e}")
+                    continue
+                img_files.append({
+                    'filename': os.path.basename(orig_path),
+                    'meta': {k: img[k] for k in ('page', 'obj_num', 'width', 'height')},
+                    'orig_path': orig_path,
+                    'thumb_path': os.path.join(outdir, f"thumb-{obj_num:04d}.png"),
+                    'save_name': None,
+                })
+        finally:
+            doc.close()
 
     if not img_files:
         return []

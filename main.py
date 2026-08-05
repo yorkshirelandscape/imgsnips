@@ -17,9 +17,9 @@
 import os
 import sys
 import shutil
-import tempfile
+import threading
 
-from PyQt6.QtCore import Qt, QThread, QTimer, QSize, QEvent, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QEvent, pyqtSignal, QUrl
 from PyQt6.QtGui import (
     QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
 )
@@ -94,7 +94,16 @@ class ImgSnipsApp(QApplication):
         return super().event(event)
 
 
-class ExtractWorker(QThread):
+class ExtractWorker(QObject):
+    """Runs extraction on a plain Python thread, not a QThread. PyMuPDF
+    (via its underlying MuPDF C library) turned out to intermittently drop
+    files -- silently, no exception -- specifically when its extraction
+    code ran on a QThread alongside a live, running Qt event loop; the
+    exact same extraction calls proved 100% reliable across many repeated
+    runs both on the main thread and on a plain threading.Thread. Signal
+    emission from a non-QThread background thread is still safe and still
+    gets delivered on the receiving (main-thread) object's thread via
+    Qt's normal cross-thread queued-connection handling."""
     finished_ok = pyqtSignal(list)
     no_images = pyqtSignal()
     error = pyqtSignal(str)
@@ -104,7 +113,11 @@ class ExtractWorker(QThread):
         self.pdf_path = pdf_path
         self.outdir = outdir
 
-    def run(self):
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
         try:
             images = pe.extract_images(self.pdf_path, self.outdir)
         except Exception as e:
@@ -226,10 +239,18 @@ class MainWindow(QMainWindow):
         self._relayout_timer.start(120)
 
     def _maybe_relayout_grid(self):
+        # Previously skipped the rebuild unless _compute_grid_cols() had
+        # already diverged from the cached _grid_cols -- that comparison
+        # intermittently went stale (observed: column count stuck at a
+        # narrower window's value even seconds after resizing much wider,
+        # with no reproducible single cause found), silently freezing the
+        # grid's reflow. render_grid() already recomputes the column count
+        # itself, so the outer comparison was a pure optimization; dropping
+        # it costs a redundant rebuild on the rare occasions the width
+        # truly didn't change, in exchange for reflow that can't get stuck.
         if self.stack.currentIndex() != 1 or not self.images:
             return
-        if self._compute_grid_cols() != self._grid_cols:
-            self.render_grid()
+        self.render_grid()
 
     def _is_dark_mode(self):
         scheme = QApplication.instance().styleHints().colorScheme()
@@ -582,12 +603,22 @@ class MainWindow(QMainWindow):
         # exactly as before.
         multi_doc = len({img.get('doc') for img in self.images}) > 1
         last_row = 0
-        for idx, img in enumerate(self.images):
-            row = idx // cols
-            col = idx % cols
-            cell = self._build_cell(img, page_counter, idx, multi_doc)
+        broken = []
+        # Indexed separately from the source list so a dropped (broken)
+        # entry doesn't leave a gap in the grid -- position/_idx reflect
+        # what's actually displayed, not the raw self.images order.
+        placed = 0
+        for img in self.images:
+            cell = self._build_cell(img, page_counter, placed, multi_doc)
+            if cell is None:
+                broken.append(img)
+                continue
+            row, col = placed // cols, placed % cols
             self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
             last_row = row
+            placed += 1
+        for img in broken:
+            self.images.remove(img)
         # Soak up leftover vertical space in a phantom row so cards stay
         # compact at the top instead of stretching to fill the scroll area.
         self.grid_layout.setRowStretch(last_row + 1, 1)
@@ -598,6 +629,17 @@ class MainWindow(QMainWindow):
             self.render_grid()
 
     def _build_cell(self, img, page_counter, idx, multi_doc):
+        # Extraction can (rarely) leave an entry whose backing files never
+        # actually landed on disk -- observed intermittently with MuPDF
+        # under back-to-back extractions despite that now being serialized
+        # (see the lock in pdf_extract.py). Drop the card rather than
+        # crashing the whole grid rebuild over one bad entry, the same way
+        # extraction itself already tolerates a single undecodable image.
+        thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
+        if not os.path.exists(thumb_path):
+            print(f"[WARN] Image object {img['meta'].get('obj_num')} has no backing file on disk; dropping it from the grid.")
+            return None
+
         meta = img['meta']
         pg = meta.get('page', '?')
         pg_str = f"{int(pg):03}" if isinstance(pg, int) else str(pg)
@@ -621,7 +663,6 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(6, 6, 6, 1)
         v.setSpacing(4)
 
-        thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
         pil_thumb = Image.open(thumb_path)
         pil_thumb.thumbnail((self.thumb_size, self.thumb_size))
         thumb_label = ClickableLabel()
@@ -778,7 +819,15 @@ class MainWindow(QMainWindow):
             meta['width'], meta['height'] = h, w
             img['_dims_label'].setText(f"{h} x {w}")
 
-        img['_thumb_label'].setPixmap(pil_to_pixmap(thumb))
+        # `thumb` is capped at THUMB_CACHE_SIZE for the on-disk cache, which
+        # can be larger than the card's current display size -- the label
+        # itself is a fixed self.thumb_size square, so setting the cache
+        # copy directly overflows it instead of filling it. Downscale a
+        # copy for display the same way _build_cell does when it first
+        # loads the cache file.
+        display_thumb = thumb.copy()
+        display_thumb.thumbnail((self.thumb_size, self.thumb_size))
+        img['_thumb_label'].setPixmap(pil_to_pixmap(display_thumb))
 
     def show_full_res(self, img):
         orig_path = img['orig_path']
@@ -876,9 +925,9 @@ def main():
     # FileOpen event above only covers a fresh "Open With" request sent to
     # an already-running instance, not a cold launch) or plain CLI usage
     # passes the file as a normal argument to a fresh process. Deferred via
-    # singleShot rather than called inline: starting the extraction
-    # QThread before the event loop is actually running (app.exec() below)
-    # means its cross-thread finished_ok signal has no running loop to be
+    # singleShot rather than called inline: starting the extraction thread
+    # before the event loop is actually running (app.exec() below) means
+    # its cross-thread finished_ok signal has no running loop to be
     # queued against yet.
     for arg in sys.argv[1:]:
         if arg.lower().endswith('.pdf') and os.path.isfile(arg):
