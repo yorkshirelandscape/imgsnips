@@ -18,6 +18,7 @@
 import os
 import io
 import hashlib
+import tempfile
 import pymupdf
 from PIL import Image, ImageChops
 
@@ -245,10 +246,8 @@ def extract_images(pdf_path, outdir):
     return kept
 
 
-def make_extract_dir(base_tmpdir=None):
-    """Create/clear a fresh extraction directory."""
-    import tempfile
-    import shutil
-    if base_tmpdir and os.path.exists(base_tmpdir):
-        shutil.rmtree(base_tmpdir)
+def make_extract_dir():
+    """Create a fresh, uniquely-named extraction directory. Each call gets
+    its own directory rather than reusing/clearing a previous one, so
+    multiple PDFs can be open (and their files kept alive) at once."""
     return tempfile.mkdtemp(prefix='imgsnips_')

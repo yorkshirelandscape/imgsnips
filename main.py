@@ -187,7 +187,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle('ImgSnips')
         self.images = []
-        self.tmpdir = None
+        # One extraction directory per opened PDF, since opening a second
+        # PDF no longer replaces the first -- both need to keep their
+        # files alive until the app closes.
+        self.tmpdirs = []
         self.spinner_movie = None
         self.theme_colors = {}
         self._selection_anchor_idx = None
@@ -480,9 +483,10 @@ class MainWindow(QMainWindow):
         if not pdf_path:
             return
         self.show_spinner()
-        self.tmpdir = pe.make_extract_dir(self.tmpdir)
-        self.worker = ExtractWorker(pdf_path, self.tmpdir)
-        self.worker.finished_ok.connect(self.on_extract_finished)
+        outdir = pe.make_extract_dir()
+        self.tmpdirs.append(outdir)
+        self.worker = ExtractWorker(pdf_path, outdir)
+        self.worker.finished_ok.connect(lambda images: self.on_extract_finished(images, pdf_path))
         self.worker.no_images.connect(self.on_no_images)
         self.worker.error.connect(self.on_extract_error)
         self.worker.start()
@@ -511,9 +515,12 @@ class MainWindow(QMainWindow):
         self._return_to_prior_page()
         QMessageBox.critical(self, 'Extraction Error', message)
 
-    def on_extract_finished(self, images):
+    def on_extract_finished(self, images, pdf_path):
         self.hide_spinner()
-        self.images = images
+        doc_stem = os.path.splitext(os.path.basename(pdf_path))[0]
+        for img in images:
+            img['doc'] = doc_stem
+        self.images.extend(images)
         self._selection_anchor_idx = None
         self.render_grid()
         self.stack.setCurrentIndex(1)
@@ -547,11 +554,15 @@ class MainWindow(QMainWindow):
         cols = self._compute_grid_cols()
         self._grid_cols = cols
         page_counter = {}
+        # Only prefix save names with their source document once there's
+        # more than one loaded -- keeps the common single-PDF case's names
+        # exactly as before.
+        multi_doc = len({img.get('doc') for img in self.images}) > 1
         last_row = 0
         for idx, img in enumerate(self.images):
             row = idx // cols
             col = idx % cols
-            cell = self._build_cell(img, page_counter, idx)
+            cell = self._build_cell(img, page_counter, idx, multi_doc)
             self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
             last_row = row
         # Soak up leftover vertical space in a phantom row so cards stay
@@ -563,14 +574,18 @@ class MainWindow(QMainWindow):
         if self.images:
             self.render_grid()
 
-    def _build_cell(self, img, page_counter, idx):
+    def _build_cell(self, img, page_counter, idx, multi_doc):
         meta = img['meta']
         pg = meta.get('page', '?')
         pg_str = f"{int(pg):03}" if isinstance(pg, int) else str(pg)
-        page_counter[pg_str] = page_counter.get(pg_str, 0) + 1
-        idx_str = f"{page_counter[pg_str]:02}"
+        # Keyed by (doc, page) rather than just page, so two different PDFs
+        # each starting at page 1 don't share -- and inflate -- one counter.
+        counter_key = (img.get('doc'), pg_str)
+        page_counter[counter_key] = page_counter.get(counter_key, 0) + 1
+        idx_str = f"{page_counter[counter_key]:02}"
         if not img.get('save_name'):
-            img['save_name'] = f"pg{pg_str}-{idx_str}"
+            prefix = f"{img['doc']}-" if multi_doc and img.get('doc') else ''
+            img['save_name'] = f"{prefix}pg{pg_str}-{idx_str}"
         # Rebuilt from scratch on every render_grid() call (e.g. on an OS
         # theme change), so use setdefault rather than clobbering a
         # selection the user already made.
@@ -780,7 +795,7 @@ class MainWindow(QMainWindow):
         return pil_img.resize(new_size, Image.Resampling.LANCZOS)
 
     def save_selected(self):
-        if not self.tmpdir or not os.path.exists(self.tmpdir):
+        if not self.images:
             QMessageBox.critical(self, 'No Images', 'No images to save. Please open a PDF first.')
             return
         selected = [img for img in self.images if img.get('selected', True)]
@@ -821,8 +836,9 @@ class MainWindow(QMainWindow):
         msg.exec()
 
     def closeEvent(self, event):
-        if self.tmpdir and os.path.exists(self.tmpdir):
-            shutil.rmtree(self.tmpdir, ignore_errors=True)
+        for tmpdir in self.tmpdirs:
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
         super().closeEvent(event)
 
 

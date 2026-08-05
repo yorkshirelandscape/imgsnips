@@ -6,12 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Opening a second (or third, etc.) PDF now adds its images to the grid alongside whatever's already open, instead of replacing it -- each opened PDF keeps its own extracted files alive until the app closes. Default save names only get a source-document prefix (e.g. `some-file-pg001-01`) once more than one document is actually loaded, so the common single-PDF case looks exactly as it always has.
+
 ### ToDo
 - Round 2
   - Option to set background color instead of transparent
   - When saving, prompt to confirm file overwriting
 - Round 3
-  - Open two PDFs at once
   - Appear in context menu's Open with... list
 
 ## [1.1.0] - 2026-08-04
