@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 Pipfile.lock
 input
+.vscode
 
 # PyInstaller
 build/
