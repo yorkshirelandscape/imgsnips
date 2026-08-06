@@ -7,8 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Opening a second (or third, etc.) PDF now adds its images to the grid alongside whatever's already open, instead of replacing it -- each opened PDF keeps its own extracted files alive until the app closes. Default save names only get a source-document prefix (e.g. `some-file-pg001-01`) once more than one document is actually loaded, so the common single-PDF case looks exactly as it always has.
-- ImgSnips now opens a PDF handed to it directly -- as a command-line argument, or (macOS) via Finder's "Open With" on an already-running instance. The macOS build now declares itself a PDF viewer (`CFBundleDocumentTypes`, alternate handler rank) so it shows up in that "Open With" list in the first place, rather than just being able to handle a file if it somehow got one.
+- Each opened PDF now gets its own tab instead of replacing (or merging into) whatever's already open. Icon size is remembered per tab; the window title and tab label both show the current file's name.
+- ImgSnips now opens a PDF handed to it directly -- a command-line argument, or (macOS) Finder's "Open With" on an already-running instance, which now lists ImgSnips as a PDF viewer.
 
 ### Fixed
 - Rotating an image made its thumbnail ignore the current icon size, overflowing its card into neighboring ones. The rotated thumbnail was set from the on-disk cache copy (capped at a fixed 280px for reuse at any icon size) without the same downscale-to-current-size step every other thumbnail gets; it's now downscaled the same way immediately after rotating.

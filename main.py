@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QFileDialog,
     QMessageBox, QRadioButton, QButtonGroup, QStackedWidget, QDialog, QInputDialog,
-    QComboBox, QSpinBox, QSlider,
+    QComboBox, QSpinBox, QSlider, QTabWidget,
 )
 from PIL import Image
 from PIL.ImageQt import ImageQt
@@ -77,6 +77,51 @@ def emoji_icon(glyph, point_size):
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
     painter.end()
     return QIcon(pixmap), QSize(side, side)
+
+
+def is_dark_mode(widget):
+    scheme = QApplication.instance().styleHints().colorScheme()
+    if scheme == Qt.ColorScheme.Dark:
+        return True
+    if scheme == Qt.ColorScheme.Light:
+        return False
+    # Unknown: fall back to inspecting the actual palette we were handed.
+    return widget.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def compute_theme_colors(widget):
+    """Derive card/text colors from the live system palette instead of
+    hardcoding a light- or dark-mode assumption, so the UI tracks whatever
+    appearance the OS is actually set to (and updates if it changes).
+    Module-level rather than a method: every open tab needs the same
+    computation, and it only depends on the app-wide palette, not on any
+    per-tab state."""
+    window = widget.palette().color(QPalette.ColorRole.Window)
+    text = widget.palette().color(QPalette.ColorRole.WindowText)
+    if is_dark_mode(widget):
+        unselected_bg = window.lighter(128)
+        unselected_border = window.lighter(165)
+        selected_bg = QColor('#123a5c')
+        selected_border = QColor('#64b5f6')
+    else:
+        unselected_bg = window.darker(107)
+        unselected_border = window.darker(120)
+        selected_bg = QColor('#e3f2fd')
+        selected_border = QColor('#1976d2')
+    secondary_text = QColor(text)
+    secondary_text.setAlpha(160)
+    return {
+        'text': text.name(),
+        'secondary_text': f'rgba({secondary_text.red()}, {secondary_text.green()}, {secondary_text.blue()}, {secondary_text.alpha()})',
+        'unselected_bg': unselected_bg.name(),
+        'unselected_border': unselected_border.name(),
+        'selected_bg': selected_bg.name(),
+        'selected_border': selected_border.name(),
+        # A low-alpha white overlay lightens either the selected or
+        # unselected card background by the same subtle amount, rather
+        # than needing a separate fixed color per selection state.
+        'name_bg': 'rgba(255, 255, 255, 28)',
+    }
 
 
 class ImgSnipsApp(QApplication):
@@ -210,19 +255,23 @@ class FullImageDialog(QDialog):
             super().keyPressEvent(event)
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
+class DocumentTab(QWidget):
+    """One opened PDF's extracted images, extraction state, and grid UI.
+    A tab only ever exists once a PDF path has already been chosen, so
+    unlike the top-level window there's no "empty" state to show here --
+    just [grid, spinner]."""
+    extractionFailed = pyqtSignal(object)  # emits self, so MainWindow knows which tab to tear down
+
+    def __init__(self, pdf_path, thumb_size):
         super().__init__()
-        self.setWindowTitle('ImgSnips')
+        self.pdf_path = pdf_path
+        self.filename = os.path.basename(pdf_path)
         self.images = []
-        # One extraction directory per opened PDF, since opening a second
-        # PDF no longer replaces the first -- both need to keep their
-        # files alive until the app closes.
-        self.tmpdirs = []
+        self.tmpdir = None
         self.spinner_movie = None
         self.theme_colors = {}
         self._selection_anchor_idx = None
-        self.thumb_size = DEFAULT_THUMB_SIZE
+        self.thumb_size = thumb_size
         self._grid_cols = None
         # Recomputing the column count on every intermediate resize event
         # (fired continuously while a window edge is dragged) would rebuild
@@ -231,75 +280,371 @@ class MainWindow(QMainWindow):
         self._relayout_timer.setSingleShot(True)
         self._relayout_timer.timeout.connect(self._maybe_relayout_grid)
         self._build_ui()
-        self._center_on_screen(965, 800)
-        QApplication.instance().styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+        self._start_extraction()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._relayout_timer.start(120)
 
     def _maybe_relayout_grid(self):
-        # Previously skipped the rebuild unless _compute_grid_cols() had
-        # already diverged from the cached _grid_cols -- that comparison
-        # intermittently went stale (observed: column count stuck at a
-        # narrower window's value even seconds after resizing much wider,
-        # with no reproducible single cause found), silently freezing the
-        # grid's reflow. render_grid() already recomputes the column count
-        # itself, so the outer comparison was a pure optimization; dropping
-        # it costs a redundant rebuild on the rare occasions the width
-        # truly didn't change, in exchange for reflow that can't get stuck.
-        if self.stack.currentIndex() != 1 or not self.images:
+        if self.stack.currentIndex() != 0 or not self.images:
             return
         self.render_grid()
 
-    def _is_dark_mode(self):
-        scheme = QApplication.instance().styleHints().colorScheme()
-        if scheme == Qt.ColorScheme.Dark:
-            return True
-        if scheme == Qt.ColorScheme.Light:
-            return False
-        # Unknown: fall back to inspecting the actual palette we were handed.
-        return self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-    def _compute_theme_colors(self):
-        """Derive card/text colors from the live system palette instead of
-        hardcoding a light- or dark-mode assumption, so the UI tracks whatever
-        appearance the OS is actually set to (and updates if it changes)."""
-        window = self.palette().color(QPalette.ColorRole.Window)
-        text = self.palette().color(QPalette.ColorRole.WindowText)
-        if self._is_dark_mode():
-            unselected_bg = window.lighter(128)
-            unselected_border = window.lighter(165)
-            selected_bg = QColor('#123a5c')
-            selected_border = QColor('#64b5f6')
+        self.stack = QStackedWidget()
+
+        # --- Grid page ---
+        grid_page = QWidget()
+        grid_page_layout = QVBoxLayout(grid_page)
+        grid_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet('border: none;')
+        self.grid_container = QWidget()
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setHorizontalSpacing(24)
+        self.grid_layout.setVerticalSpacing(18)
+        self.scroll_area.setWidget(self.grid_container)
+        grid_page_layout.addWidget(self.scroll_area)
+        self.stack.addWidget(grid_page)  # index 0
+
+        # --- Spinner page ---
+        spinner_page = QWidget()
+        spinner_layout = QVBoxLayout(spinner_page)
+        self.spinner_label = QLabel()
+        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        spinner_layout.addWidget(self.spinner_label)
+        self.stack.addWidget(spinner_page)  # index 1
+
+        layout.addWidget(self.stack)
+
+    # --- Extraction ---
+    def _start_extraction(self):
+        self.show_spinner()
+        self.tmpdir = pe.make_extract_dir()
+        self.worker = ExtractWorker(self.pdf_path, self.tmpdir)
+        self.worker.finished_ok.connect(self.on_extract_finished)
+        self.worker.no_images.connect(self.on_no_images)
+        self.worker.error.connect(self.on_extract_error)
+        self.worker.start()
+
+    def show_spinner(self):
+        self.spinner_movie = QMovie(SPINNER_PATH)
+        self.spinner_label.setMovie(self.spinner_movie)
+        self.spinner_movie.start()
+        self.stack.setCurrentIndex(1)
+
+    def hide_spinner(self):
+        if self.spinner_movie:
+            self.spinner_movie.stop()
+            self.spinner_movie = None
+
+    def on_no_images(self):
+        self.hide_spinner()
+        QMessageBox.information(self, 'No Images', 'No images found in PDF.')
+        self.extractionFailed.emit(self)
+
+    def on_extract_error(self, message):
+        self.hide_spinner()
+        QMessageBox.critical(self, 'Extraction Error', message)
+        self.extractionFailed.emit(self)
+
+    def on_extract_finished(self, images):
+        self.hide_spinner()
+        self.images = images
+        self._selection_anchor_idx = None
+        self.render_grid()
+        self.stack.setCurrentIndex(0)
+
+    # --- Grid rendering ---
+    def clear_grid(self):
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def _compute_grid_cols(self):
+        viewport_width = self.scroll_area.viewport().width()
+        if viewport_width <= 0:
+            return 1
+        left, _, right, _ = self.grid_layout.getContentsMargins()
+        spacing = self.grid_layout.horizontalSpacing()
+        # A card's rendered width is its thumbnail plus ~14px of its own
+        # padding/border, floored around 130px -- below that the info row
+        # (rename/rotate icons flanking the name) needs more room than the
+        # thumbnail itself, so shrinking further doesn't shrink the card.
+        card_width = max(self.thumb_size + 14, 130)
+        available = viewport_width - left - right
+        cols = (available + spacing) // (card_width + spacing)
+        return max(1, int(cols))
+
+    def render_grid(self):
+        self.theme_colors = compute_theme_colors(self)
+        self.clear_grid()
+        cols = self._compute_grid_cols()
+        self._grid_cols = cols
+        page_counter = {}
+        last_row = 0
+        broken = []
+        # Indexed separately from the source list so a dropped (broken)
+        # entry doesn't leave a gap in the grid -- position/_idx reflect
+        # what's actually displayed, not the raw self.images order.
+        placed = 0
+        for img in self.images:
+            cell = self._build_cell(img, page_counter, placed)
+            if cell is None:
+                broken.append(img)
+                continue
+            row, col = placed // cols, placed % cols
+            self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
+            last_row = row
+            placed += 1
+        for img in broken:
+            self.images.remove(img)
+        # Soak up leftover vertical space in a phantom row so cards stay
+        # compact at the top instead of stretching to fill the scroll area.
+        self.grid_layout.setRowStretch(last_row + 1, 1)
+
+    def _build_cell(self, img, page_counter, idx):
+        # Extraction can (rarely) leave an entry whose backing files never
+        # actually landed on disk -- observed intermittently with MuPDF
+        # under back-to-back extractions despite that now being serialized
+        # (see the lock in pdf_extract.py). Drop the card rather than
+        # crashing the whole grid rebuild over one bad entry, the same way
+        # extraction itself already tolerates a single undecodable image.
+        thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
+        if not os.path.exists(thumb_path):
+            print(f"[WARN] Image object {img['meta'].get('obj_num')} has no backing file on disk; dropping it from the grid.")
+            return None
+
+        meta = img['meta']
+        pg = meta.get('page', '?')
+        pg_str = f"{int(pg):03}" if isinstance(pg, int) else str(pg)
+        page_counter[pg_str] = page_counter.get(pg_str, 0) + 1
+        idx_str = f"{page_counter[pg_str]:02}"
+        if not img.get('save_name'):
+            img['save_name'] = f"pg{pg_str}-{idx_str}"
+        # Rebuilt from scratch on every render_grid() call (e.g. on an OS
+        # theme change), so use setdefault rather than clobbering a
+        # selection the user already made.
+        img.setdefault('selected', False)
+        img['_idx'] = idx
+
+        card = QFrame()
+        card.setObjectName('imageCard')
+        v = QVBoxLayout(card)
+        v.setContentsMargins(6, 6, 6, 1)
+        v.setSpacing(4)
+
+        pil_thumb = Image.open(thumb_path)
+        pil_thumb.thumbnail((self.thumb_size, self.thumb_size))
+        thumb_label = ClickableLabel()
+        thumb_label.setPixmap(pil_to_pixmap(pil_thumb))
+        thumb_label.setFixedSize(self.thumb_size, self.thumb_size)
+        thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumb_label.setToolTip('Click to select • double-click to preview • right-click to rotate')
+        thumb_label.clicked.connect(lambda shift_held, img=img: self.handle_thumb_clicked(img, shift_held))
+        thumb_label.doubleClicked.connect(lambda img=img: self.show_full_res(img))
+        thumb_label.rotateRequested.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
+        v.addWidget(thumb_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        img['_thumb_label'] = thumb_label
+
+        info_grid = QGridLayout()
+        info_grid.setContentsMargins(0, 2, 0, 0)
+        info_grid.setHorizontalSpacing(3)
+        info_grid.setVerticalSpacing(1)
+        info_grid.setColumnStretch(1, 1)
+
+        rename_btn = self._make_icon_button('✏️', 'Rename', self.theme_colors['text'])
+        rename_btn.clicked.connect(lambda _, img=img: self.rename_image(img))
+        name_label = ClickableLabel(img['save_name'])
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_label.setFont(QFont(NAME_FONT_FAMILY, 13))
+        name_label.setStyleSheet(
+            f"color: {self.theme_colors['text']}; background: {self.theme_colors['name_bg']}; "
+            'padding: 1px 4px;'
+        )
+        name_label.setToolTip('Double-click to rename')
+        name_label.doubleClicked.connect(lambda img=img: self.rename_image(img))
+        rotate_btn = self._make_icon_button(
+            '\U0001F504', 'Rotate clockwise (Option/Alt+click for counter-clockwise)',
+            self.theme_colors['text'],
+        )
+        # Unlike the thumbnail's right-click gesture, either mouse button
+        # rotates the same way here -- only Option/Alt picks the direction,
+        # so there's nothing to remember about which button does what on
+        # the button itself.
+        rotate_btn.clicked.connect(lambda _, img=img: self.rotate_image(
+            img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        ))
+        rotate_btn.rightClicked.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
+        info_grid.addWidget(rename_btn, 0, 0)
+        info_grid.addWidget(name_label, 0, 1)
+        info_grid.addWidget(rotate_btn, 0, 2)
+        img['_name_label'] = name_label
+
+        zoom_btn = self._make_icon_button('\U0001F50E', 'View full size', self.theme_colors['text'])
+        zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
+        dims_label = QLabel(f"{meta.get('width', '?')} x {meta.get('height', '?')}")
+        dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dims_label.setFont(QFont(SIZE_FONT_FAMILY, 10))
+        dims_label.setStyleSheet(f"color: {self.theme_colors['secondary_text']};")
+        copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
+        copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
+        info_grid.addWidget(zoom_btn, 1, 0)
+        info_grid.addWidget(dims_label, 1, 1)
+        info_grid.addWidget(copy_btn, 1, 2)
+        img['_dims_label'] = dims_label
+
+        v.addLayout(info_grid)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {self.theme_colors['unselected_border']};")
+        v.addWidget(divider)
+
+        img['_card'] = card
+        self._apply_card_style(img)
+
+        return card
+
+    def _make_icon_button(self, glyph, tooltip, color):
+        btn = IconButton(glyph)
+        btn.setFixedSize(22, 22)
+        btn.setToolTip(tooltip)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setStyleSheet(
+            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 12px; border-radius: 4px; }}'
+            'QPushButton:hover { background: rgba(127, 127, 127, 0.25); }'
+        )
+        return btn
+
+    def _apply_card_style(self, img):
+        card = img.get('_card')
+        if not card:
+            return
+        c = self.theme_colors
+        if img.get('selected', True):
+            card.setStyleSheet(
+                f"#imageCard {{ border: 2px solid {c['selected_border']}; background: {c['selected_bg']}; border-radius: 8px; }}"
+            )
         else:
-            unselected_bg = window.darker(107)
-            unselected_border = window.darker(120)
-            selected_bg = QColor('#e3f2fd')
-            selected_border = QColor('#1976d2')
-        secondary_text = QColor(text)
-        secondary_text.setAlpha(160)
-        return {
-            'text': text.name(),
-            'secondary_text': f'rgba({secondary_text.red()}, {secondary_text.green()}, {secondary_text.blue()}, {secondary_text.alpha()})',
-            'unselected_bg': unselected_bg.name(),
-            'unselected_border': unselected_border.name(),
-            'selected_bg': selected_bg.name(),
-            'selected_border': selected_border.name(),
-            # A low-alpha white overlay lightens either the selected or
-            # unselected card background by the same subtle amount, rather
-            # than needing a separate fixed color per selection state.
-            'name_bg': 'rgba(255, 255, 255, 28)',
-        }
+            card.setStyleSheet(
+                f"#imageCard {{ border: 1px solid {c['unselected_border']}; background: {c['unselected_bg']}; border-radius: 8px; }}"
+            )
+
+    def handle_thumb_clicked(self, img, shift_held):
+        idx = img['_idx']
+        if shift_held and self._selection_anchor_idx is not None:
+            # Range-select from the last plain-clicked image to this one,
+            # inclusive; the anchor itself doesn't move, so repeated
+            # shift-clicks extend/shrink relative to that original click.
+            lo, hi = sorted((self._selection_anchor_idx, idx))
+            for i in range(lo, hi + 1):
+                other = self.images[i]
+                other['selected'] = True
+                self._apply_card_style(other)
+        else:
+            img['selected'] = not img.get('selected', False)
+            self._apply_card_style(img)
+            self._selection_anchor_idx = idx
+
+    def select_all(self):
+        for img in self.images:
+            img['selected'] = True
+            self._apply_card_style(img)
+
+    def select_none(self):
+        for img in self.images:
+            img['selected'] = False
+            self._apply_card_style(img)
+
+    def rename_image(self, img):
+        new_name, ok = QInputDialog.getText(self, 'Rename Image', 'File name:', text=img['save_name'])
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if new_name:
+            img['save_name'] = new_name
+            img['_name_label'].setText(new_name)
+
+    def rotate_image(self, img, clockwise=True):
+        transpose = Image.Transpose.ROTATE_270 if clockwise else Image.Transpose.ROTATE_90
+        try:
+            with Image.open(img['orig_path']) as im:
+                rotated = im.transpose(transpose)
+                rotated.save(img['orig_path'])
+            with Image.open(img['orig_path']) as im:
+                trimmed = pe.trim_whitespace(im)
+                thumb = trimmed.copy()
+            thumb.thumbnail((pe.THUMB_CACHE_SIZE, pe.THUMB_CACHE_SIZE))
+            thumb.save(img['thumb_path'], 'PNG')
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Could not rotate image: {e}')
+            return
+
+        meta = img['meta']
+        w, h = meta.get('width'), meta.get('height')
+        if isinstance(w, int) and isinstance(h, int):
+            meta['width'], meta['height'] = h, w
+            img['_dims_label'].setText(f"{h} x {w}")
+
+        # `thumb` is capped at THUMB_CACHE_SIZE for the on-disk cache, which
+        # can be larger than the card's current display size -- the label
+        # itself is a fixed self.thumb_size square, so setting the cache
+        # copy directly overflows it instead of filling it. Downscale a
+        # copy for display the same way _build_cell does when it first
+        # loads the cache file.
+        display_thumb = thumb.copy()
+        display_thumb.thumbnail((self.thumb_size, self.thumb_size))
+        img['_thumb_label'].setPixmap(pil_to_pixmap(display_thumb))
+
+    def show_full_res(self, img):
+        orig_path = img['orig_path']
+        if not os.path.exists(orig_path):
+            QMessageBox.critical(self, 'Error', 'Image file not found.')
+            return
+        dlg = FullImageDialog(self, orig_path, img['meta'], img['filename'])
+        dlg.exec()
+
+    def copy_image(self, img):
+        try:
+            with Image.open(img['orig_path']) as im:
+                QApplication.clipboard().setPixmap(pil_to_pixmap(im))
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Could not copy image: {e}')
+
+    def cleanup(self):
+        if self.tmpdir and os.path.exists(self.tmpdir):
+            shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('ImgSnips')
+        self._build_ui()
+        self._center_on_screen(965, 800)
+        QApplication.instance().styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
 
     def _on_color_scheme_changed(self, _scheme):
-        self.render_grid()
+        for i in range(self.tab_widget.count()):
+            self.tab_widget.widget(i).render_grid()
 
     def _center_on_screen(self, w, h):
         screen = QApplication.primaryScreen().availableGeometry()
         x = screen.x() + (screen.width() - w) // 2
         y = screen.y() + (screen.height() - h) // 2
         self.setGeometry(x, y, w, h)
+
+    def current_tab(self):
+        return self.tab_widget.currentWidget()
 
     def _build_ui(self):
         toolbar = QWidget()
@@ -452,7 +797,7 @@ class MainWindow(QMainWindow):
         size_row.addWidget(small_icon)
         self.slider_icon_size = QSlider(Qt.Orientation.Horizontal)
         self.slider_icon_size.setRange(MIN_THUMB_SIZE, MAX_THUMB_SIZE)
-        self.slider_icon_size.setValue(self.thumb_size)
+        self.slider_icon_size.setValue(DEFAULT_THUMB_SIZE)
         self.slider_icon_size.setFixedWidth(140)
         self.slider_icon_size.valueChanged.connect(self._on_icon_size_changed)
         size_row.addWidget(self.slider_icon_size)
@@ -461,9 +806,9 @@ class MainWindow(QMainWindow):
         size_row.addWidget(large_icon)
         tb_layout.addLayout(size_row)
 
-        self.stack = QStackedWidget()
+        self.outer_stack = QStackedWidget()
 
-        # --- Empty state: big centered Open PDF button ---
+        # --- Empty state: big centered Open PDF button (no tabs open yet) ---
         empty_page = QWidget()
         empty_layout = QVBoxLayout(empty_page)
         big_open_btn = QPushButton('\U0001F4C2  Open PDF')
@@ -479,38 +824,22 @@ class MainWindow(QMainWindow):
         empty_layout.addStretch(1)
         empty_layout.addLayout(hcenter)
         empty_layout.addStretch(1)
-        self.stack.addWidget(empty_page)  # index 0
+        self.outer_stack.addWidget(empty_page)  # index 0
 
-        # --- Grid page ---
-        grid_page = QWidget()
-        grid_page_layout = QVBoxLayout(grid_page)
-        grid_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet('border: none;')
-        self.grid_container = QWidget()
-        self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setHorizontalSpacing(24)
-        self.grid_layout.setVerticalSpacing(18)
-        self.scroll_area.setWidget(self.grid_container)
-        grid_page_layout.addWidget(self.scroll_area)
-
-        self.stack.addWidget(grid_page)  # index 1
-
-        # --- Spinner page ---
-        spinner_page = QWidget()
-        spinner_layout = QVBoxLayout(spinner_page)
-        self.spinner_label = QLabel()
-        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        spinner_layout.addWidget(self.spinner_label)
-        self.stack.addWidget(spinner_page)  # index 2
+        # --- Tabs, one per opened PDF ---
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setMovable(True)
+        self.tab_widget.tabCloseRequested.connect(self._on_tab_close_requested)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self.outer_stack.addWidget(self.tab_widget)  # index 1
 
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
         central_layout.addWidget(toolbar)
-        central_layout.addWidget(self.stack, 1)
+        central_layout.addWidget(self.outer_stack, 1)
         self.setCentralWidget(central)
 
     # --- PDF opening / extraction ---
@@ -521,328 +850,82 @@ class MainWindow(QMainWindow):
         self.open_pdf_path(pdf_path)
 
     def open_pdf_path(self, pdf_path):
-        """Extract and load a specific PDF given its path directly -- shared
-        by the Open button's file dialog, a path passed on the command
-        line, and the OS handing us a file to open (double-click, drag onto
-        the Dock icon, or a live "Open With" request while already
-        running)."""
-        self.show_spinner()
-        outdir = pe.make_extract_dir()
-        self.tmpdirs.append(outdir)
-        self.worker = ExtractWorker(pdf_path, outdir)
-        self.worker.finished_ok.connect(lambda images: self.on_extract_finished(images, pdf_path))
-        self.worker.no_images.connect(self.on_no_images)
-        self.worker.error.connect(self.on_extract_error)
-        self.worker.start()
+        """Open a specific PDF given its path directly, in a new tab --
+        shared by the Open button's file dialog, a path passed on the
+        command line, and the OS handing us a file to open (double-click,
+        drag onto the Dock icon, or a live "Open With" request while
+        already running). A new tab starts at the icon-size slider's
+        current position rather than a hardcoded default, so it matches
+        whatever the rest of the session has been using."""
+        tab = DocumentTab(pdf_path, self.slider_icon_size.value())
+        tab.extractionFailed.connect(self._on_tab_extraction_failed)
+        index = self.tab_widget.addTab(tab, tab.filename)
+        self.tab_widget.setCurrentIndex(index)
+        self.outer_stack.setCurrentIndex(1)
 
-    def show_spinner(self):
-        self.spinner_movie = QMovie(SPINNER_PATH)
-        self.spinner_label.setMovie(self.spinner_movie)
-        self.spinner_movie.start()
-        self.stack.setCurrentIndex(2)
+    def _on_tab_extraction_failed(self, tab):
+        """A tab's own extraction turned up nothing (or errored) -- it
+        never had anything worth keeping open, so tear it down instead of
+        leaving a permanently-empty tab behind."""
+        index = self.tab_widget.indexOf(tab)
+        if index != -1:
+            self.tab_widget.removeTab(index)
+        tab.cleanup()
+        self._sync_empty_state()
 
-    def hide_spinner(self):
-        if self.spinner_movie:
-            self.spinner_movie.stop()
-            self.spinner_movie = None
+    def _on_tab_close_requested(self, index):
+        tab = self.tab_widget.widget(index)
+        self.tab_widget.removeTab(index)
+        if tab is not None:
+            tab.cleanup()
+        self._sync_empty_state()
 
-    def _return_to_prior_page(self):
-        self.stack.setCurrentIndex(1 if self.images else 0)
+    def _sync_empty_state(self):
+        if self.tab_widget.count() == 0:
+            self.outer_stack.setCurrentIndex(0)
+            self.setWindowTitle('ImgSnips')
 
-    def on_no_images(self):
-        self.hide_spinner()
-        self._return_to_prior_page()
-        QMessageBox.information(self, 'No Images', 'No images found in PDF.')
-
-    def on_extract_error(self, message):
-        self.hide_spinner()
-        self._return_to_prior_page()
-        QMessageBox.critical(self, 'Extraction Error', message)
-
-    def on_extract_finished(self, images, pdf_path):
-        self.hide_spinner()
-        doc_stem = os.path.splitext(os.path.basename(pdf_path))[0]
-        for img in images:
-            img['doc'] = doc_stem
-        self.images.extend(images)
-        self._selection_anchor_idx = None
-        self.render_grid()
-        self.stack.setCurrentIndex(1)
-
-    # --- Grid rendering ---
-    def clear_grid(self):
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
-    def _compute_grid_cols(self):
-        viewport_width = self.scroll_area.viewport().width()
-        if viewport_width <= 0:
-            return 1
-        left, _, right, _ = self.grid_layout.getContentsMargins()
-        spacing = self.grid_layout.horizontalSpacing()
-        # A card's rendered width is its thumbnail plus ~14px of its own
-        # padding/border, floored around 130px -- below that the info row
-        # (rename/rotate icons flanking the name) needs more room than the
-        # thumbnail itself, so shrinking further doesn't shrink the card.
-        card_width = max(self.thumb_size + 14, 130)
-        available = viewport_width - left - right
-        cols = (available + spacing) // (card_width + spacing)
-        return max(1, int(cols))
-
-    def render_grid(self):
-        self.theme_colors = self._compute_theme_colors()
-        self.clear_grid()
-        cols = self._compute_grid_cols()
-        self._grid_cols = cols
-        page_counter = {}
-        # Only prefix save names with their source document once there's
-        # more than one loaded -- keeps the common single-PDF case's names
-        # exactly as before.
-        multi_doc = len({img.get('doc') for img in self.images}) > 1
-        last_row = 0
-        broken = []
-        # Indexed separately from the source list so a dropped (broken)
-        # entry doesn't leave a gap in the grid -- position/_idx reflect
-        # what's actually displayed, not the raw self.images order.
-        placed = 0
-        for img in self.images:
-            cell = self._build_cell(img, page_counter, placed, multi_doc)
-            if cell is None:
-                broken.append(img)
-                continue
-            row, col = placed // cols, placed % cols
-            self.grid_layout.addWidget(cell, row, col, Qt.AlignmentFlag.AlignTop)
-            last_row = row
-            placed += 1
-        for img in broken:
-            self.images.remove(img)
-        # Soak up leftover vertical space in a phantom row so cards stay
-        # compact at the top instead of stretching to fill the scroll area.
-        self.grid_layout.setRowStretch(last_row + 1, 1)
+    def _on_tab_changed(self, index):
+        tab = self.tab_widget.widget(index)
+        if tab is None:
+            self.setWindowTitle('ImgSnips')
+            return
+        self.setWindowTitle(f'ImgSnips — {tab.filename}')
+        # The icon-size slider is shared toolbar UI but reflects whichever
+        # tab is active; block its signal while syncing so this doesn't
+        # bounce back into _on_icon_size_changed and re-render the tab
+        # we're just now switching to (harmless, but wasted work).
+        self.slider_icon_size.blockSignals(True)
+        self.slider_icon_size.setValue(tab.thumb_size)
+        self.slider_icon_size.blockSignals(False)
+        # A tab hidden during a resize doesn't get its own resizeEvent
+        # calls, so its column count can be stale for the current window
+        # size by the time you switch to it. Cheap to check, since (unlike
+        # the resize-debounce path) there's no timing race here -- this
+        # runs once, synchronously, right when the tab becomes current.
+        if tab.images and tab.stack.currentIndex() == 0 and tab._compute_grid_cols() != tab._grid_cols:
+            tab.render_grid()
 
     def _on_icon_size_changed(self, value):
-        self.thumb_size = value
-        if self.images:
-            self.render_grid()
-
-    def _build_cell(self, img, page_counter, idx, multi_doc):
-        # Extraction can (rarely) leave an entry whose backing files never
-        # actually landed on disk -- observed intermittently with MuPDF
-        # under back-to-back extractions despite that now being serialized
-        # (see the lock in pdf_extract.py). Drop the card rather than
-        # crashing the whole grid rebuild over one bad entry, the same way
-        # extraction itself already tolerates a single undecodable image.
-        thumb_path = img['thumb_path'] if os.path.exists(img['thumb_path']) else img['orig_path']
-        if not os.path.exists(thumb_path):
-            print(f"[WARN] Image object {img['meta'].get('obj_num')} has no backing file on disk; dropping it from the grid.")
-            return None
-
-        meta = img['meta']
-        pg = meta.get('page', '?')
-        pg_str = f"{int(pg):03}" if isinstance(pg, int) else str(pg)
-        # Keyed by (doc, page) rather than just page, so two different PDFs
-        # each starting at page 1 don't share -- and inflate -- one counter.
-        counter_key = (img.get('doc'), pg_str)
-        page_counter[counter_key] = page_counter.get(counter_key, 0) + 1
-        idx_str = f"{page_counter[counter_key]:02}"
-        if not img.get('save_name'):
-            prefix = f"{img['doc']}-" if multi_doc and img.get('doc') else ''
-            img['save_name'] = f"{prefix}pg{pg_str}-{idx_str}"
-        # Rebuilt from scratch on every render_grid() call (e.g. on an OS
-        # theme change), so use setdefault rather than clobbering a
-        # selection the user already made.
-        img.setdefault('selected', False)
-        img['_idx'] = idx
-
-        card = QFrame()
-        card.setObjectName('imageCard')
-        v = QVBoxLayout(card)
-        v.setContentsMargins(6, 6, 6, 1)
-        v.setSpacing(4)
-
-        pil_thumb = Image.open(thumb_path)
-        pil_thumb.thumbnail((self.thumb_size, self.thumb_size))
-        thumb_label = ClickableLabel()
-        thumb_label.setPixmap(pil_to_pixmap(pil_thumb))
-        thumb_label.setFixedSize(self.thumb_size, self.thumb_size)
-        thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        thumb_label.setToolTip('Click to select • double-click to preview • right-click to rotate')
-        thumb_label.clicked.connect(lambda shift_held, img=img: self.handle_thumb_clicked(img, shift_held))
-        thumb_label.doubleClicked.connect(lambda img=img: self.show_full_res(img))
-        thumb_label.rotateRequested.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
-        v.addWidget(thumb_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        img['_thumb_label'] = thumb_label
-
-        info_grid = QGridLayout()
-        info_grid.setContentsMargins(0, 2, 0, 0)
-        info_grid.setHorizontalSpacing(3)
-        info_grid.setVerticalSpacing(1)
-        info_grid.setColumnStretch(1, 1)
-
-        rename_btn = self._make_icon_button('✏️', 'Rename', self.theme_colors['text'])
-        rename_btn.clicked.connect(lambda _, img=img: self.rename_image(img))
-        name_label = ClickableLabel(img['save_name'])
-        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setFont(QFont(NAME_FONT_FAMILY, 13))
-        name_label.setStyleSheet(
-            f"color: {self.theme_colors['text']}; background: {self.theme_colors['name_bg']}; "
-            'padding: 1px 4px;'
-        )
-        name_label.setToolTip('Double-click to rename')
-        name_label.doubleClicked.connect(lambda img=img: self.rename_image(img))
-        rotate_btn = self._make_icon_button(
-            '\U0001F504', 'Rotate clockwise (Option/Alt+click for counter-clockwise)',
-            self.theme_colors['text'],
-        )
-        # Unlike the thumbnail's right-click gesture, either mouse button
-        # rotates the same way here -- only Option/Alt picks the direction,
-        # so there's nothing to remember about which button does what on
-        # the button itself.
-        rotate_btn.clicked.connect(lambda _, img=img: self.rotate_image(
-            img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
-        ))
-        rotate_btn.rightClicked.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
-        info_grid.addWidget(rename_btn, 0, 0)
-        info_grid.addWidget(name_label, 0, 1)
-        info_grid.addWidget(rotate_btn, 0, 2)
-        img['_name_label'] = name_label
-
-        zoom_btn = self._make_icon_button('\U0001F50E', 'View full size', self.theme_colors['text'])
-        zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
-        dims_label = QLabel(f"{meta.get('width', '?')} x {meta.get('height', '?')}")
-        dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        dims_label.setFont(QFont(SIZE_FONT_FAMILY, 10))
-        dims_label.setStyleSheet(f"color: {self.theme_colors['secondary_text']};")
-        copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
-        copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
-        info_grid.addWidget(zoom_btn, 1, 0)
-        info_grid.addWidget(dims_label, 1, 1)
-        info_grid.addWidget(copy_btn, 1, 2)
-        img['_dims_label'] = dims_label
-
-        v.addLayout(info_grid)
-
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setStyleSheet(f"color: {self.theme_colors['unselected_border']};")
-        v.addWidget(divider)
-
-        img['_card'] = card
-        self._apply_card_style(img)
-
-        return card
-
-    def _make_icon_button(self, glyph, tooltip, color):
-        btn = IconButton(glyph)
-        btn.setFixedSize(22, 22)
-        btn.setToolTip(tooltip)
-        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn.setStyleSheet(
-            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 12px; border-radius: 4px; }}'
-            'QPushButton:hover { background: rgba(127, 127, 127, 0.25); }'
-        )
-        return btn
-
-    def _apply_card_style(self, img):
-        card = img.get('_card')
-        if not card:
+        tab = self.current_tab()
+        if tab is None:
             return
-        c = self.theme_colors
-        if img.get('selected', True):
-            card.setStyleSheet(
-                f"#imageCard {{ border: 2px solid {c['selected_border']}; background: {c['selected_bg']}; border-radius: 8px; }}"
-            )
-        else:
-            card.setStyleSheet(
-                f"#imageCard {{ border: 1px solid {c['unselected_border']}; background: {c['unselected_bg']}; border-radius: 8px; }}"
-            )
-
-    def handle_thumb_clicked(self, img, shift_held):
-        idx = img['_idx']
-        if shift_held and self._selection_anchor_idx is not None:
-            # Range-select from the last plain-clicked image to this one,
-            # inclusive; the anchor itself doesn't move, so repeated
-            # shift-clicks extend/shrink relative to that original click.
-            lo, hi = sorted((self._selection_anchor_idx, idx))
-            for i in range(lo, hi + 1):
-                other = self.images[i]
-                other['selected'] = True
-                self._apply_card_style(other)
-        else:
-            img['selected'] = not img.get('selected', False)
-            self._apply_card_style(img)
-            self._selection_anchor_idx = idx
-
-    def select_all(self):
-        for img in self.images:
-            img['selected'] = True
-            self._apply_card_style(img)
-
-    def select_none(self):
-        for img in self.images:
-            img['selected'] = False
-            self._apply_card_style(img)
+        tab.thumb_size = value
+        if tab.images:
+            tab.render_grid()
 
     def _on_resize_mode_changed(self):
         self.spin_resize_length.setEnabled(self.combo_resize.currentData() != 'none')
 
-    def rename_image(self, img):
-        new_name, ok = QInputDialog.getText(self, 'Rename Image', 'File name:', text=img['save_name'])
-        if not ok:
-            return
-        new_name = new_name.strip()
-        if new_name:
-            img['save_name'] = new_name
-            img['_name_label'].setText(new_name)
+    def select_all(self):
+        tab = self.current_tab()
+        if tab:
+            tab.select_all()
 
-    def rotate_image(self, img, clockwise=True):
-        transpose = Image.Transpose.ROTATE_270 if clockwise else Image.Transpose.ROTATE_90
-        try:
-            with Image.open(img['orig_path']) as im:
-                rotated = im.transpose(transpose)
-                rotated.save(img['orig_path'])
-            with Image.open(img['orig_path']) as im:
-                trimmed = pe.trim_whitespace(im)
-                thumb = trimmed.copy()
-            thumb.thumbnail((pe.THUMB_CACHE_SIZE, pe.THUMB_CACHE_SIZE))
-            thumb.save(img['thumb_path'], 'PNG')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Could not rotate image: {e}')
-            return
-
-        meta = img['meta']
-        w, h = meta.get('width'), meta.get('height')
-        if isinstance(w, int) and isinstance(h, int):
-            meta['width'], meta['height'] = h, w
-            img['_dims_label'].setText(f"{h} x {w}")
-
-        # `thumb` is capped at THUMB_CACHE_SIZE for the on-disk cache, which
-        # can be larger than the card's current display size -- the label
-        # itself is a fixed self.thumb_size square, so setting the cache
-        # copy directly overflows it instead of filling it. Downscale a
-        # copy for display the same way _build_cell does when it first
-        # loads the cache file.
-        display_thumb = thumb.copy()
-        display_thumb.thumbnail((self.thumb_size, self.thumb_size))
-        img['_thumb_label'].setPixmap(pil_to_pixmap(display_thumb))
-
-    def show_full_res(self, img):
-        orig_path = img['orig_path']
-        if not os.path.exists(orig_path):
-            QMessageBox.critical(self, 'Error', 'Image file not found.')
-            return
-        dlg = FullImageDialog(self, orig_path, img['meta'], img['filename'])
-        dlg.exec()
-
-    def copy_image(self, img):
-        try:
-            with Image.open(img['orig_path']) as im:
-                QApplication.clipboard().setPixmap(pil_to_pixmap(im))
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Could not copy image: {e}')
+    def select_none(self):
+        tab = self.current_tab()
+        if tab:
+            tab.select_none()
 
     # --- Saving ---
     @staticmethod
@@ -867,10 +950,11 @@ class MainWindow(QMainWindow):
         return pil_img.resize(new_size, Image.Resampling.LANCZOS)
 
     def save_selected(self):
-        if not self.images:
+        tab = self.current_tab()
+        if tab is None or not tab.images:
             QMessageBox.critical(self, 'No Images', 'No images to save. Please open a PDF first.')
             return
-        selected = [img for img in self.images if img.get('selected', True)]
+        selected = [img for img in tab.images if img.get('selected', True)]
         if not selected:
             QMessageBox.information(self, 'No Selection', 'No images selected.')
             return
@@ -908,9 +992,8 @@ class MainWindow(QMainWindow):
         msg.exec()
 
     def closeEvent(self, event):
-        for tmpdir in self.tmpdirs:
-            if os.path.exists(tmpdir):
-                shutil.rmtree(tmpdir, ignore_errors=True)
+        for i in range(self.tab_widget.count()):
+            self.tab_widget.widget(i).cleanup()
         super().closeEvent(event)
 
 
