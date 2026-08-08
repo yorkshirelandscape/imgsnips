@@ -79,6 +79,17 @@ def emoji_icon(glyph, point_size):
     return QIcon(pixmap), QSize(side, side)
 
 
+def direction_glyphs(alt_held):
+    """Rotate/mirror buttons show which direction Option/Alt currently
+    selects rather than a static icon plus a tooltip explaining the
+    modifier -- shared by the buttons' initial state (in case Alt is
+    already held when a card is built) and by the live app-wide watch
+    that swaps them the moment Alt is pressed or released."""
+    if alt_held:
+        return ('↺', 'Rotate left'), ('↕', 'Flip vertical')
+    return ('↻', 'Rotate right (Option/Alt for left)'), ('↔', 'Flip horizontal (Option/Alt for vertical)')
+
+
 def is_dark_mode(widget):
     scheme = QApplication.instance().styleHints().colorScheme()
     if scheme == Qt.ColorScheme.Dark:
@@ -125,18 +136,34 @@ def compute_theme_colors(widget):
 
 
 class ImgSnipsApp(QApplication):
-    """Subclassed only to catch QEvent.Type.FileOpen. On macOS, launching
-    an already-running app via Finder's "Open With" arrives as this Qt
-    event rather than a fresh process with a command-line argument (that
-    only happens for a cold launch) -- a plain QApplication silently drops
-    it, since nothing asks for it by default."""
+    """Subclassed to catch two things a plain QApplication drops silently:
+
+    - QEvent.Type.FileOpen: on macOS, launching an already-running app via
+      Finder's "Open With" arrives as this event rather than a fresh
+      process with a command-line argument (that only happens for a cold
+      launch).
+    - Option/Alt press and release, application-wide, regardless of which
+      widget has focus: the rotate/mirror buttons swap their icon live
+      while Option/Alt is held to preview which direction a click will
+      perform. Key events are normally only delivered to the focused
+      widget, not to the application object itself (that's what event()
+      below catches) -- notify() is the one hook Qt calls for every event
+      dispatched anywhere in the app, which is what a global modifier
+      watch actually needs."""
     fileOpenRequested = pyqtSignal(str)
+    altModifierChanged = pyqtSignal(bool)
 
     def event(self, event):
         if event.type() == QEvent.Type.FileOpen:
             self.fileOpenRequested.emit(event.file())
             return True
         return super().event(event)
+
+    def notify(self, receiver, event):
+        event_type = event.type()
+        if event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_Alt:
+            self.altModifierChanged.emit(event_type == QEvent.Type.KeyPress)
+        return super().notify(receiver, event)
 
 
 class ExtractWorker(QObject):
@@ -472,10 +499,9 @@ class DocumentTab(QWidget):
         )
         name_label.setToolTip('Double-click to rename')
         name_label.doubleClicked.connect(lambda img=img: self.rename_image(img))
-        rotate_btn = self._make_icon_button(
-            '\U0001F504', 'Rotate clockwise (Option/Alt+click for counter-clockwise)',
-            self.theme_colors['text'],
-        )
+        alt_held = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        (rotate_glyph, rotate_tip), (mirror_glyph, mirror_tip) = direction_glyphs(alt_held)
+        rotate_btn = self._make_icon_button(rotate_glyph, rotate_tip, self.theme_colors['text'])
         # Unlike the thumbnail's right-click gesture, either mouse button
         # rotates the same way here -- only Option/Alt picks the direction,
         # so there's nothing to remember about which button does what on
@@ -484,10 +510,17 @@ class DocumentTab(QWidget):
             img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
         ))
         rotate_btn.rightClicked.connect(lambda clockwise, img=img: self.rotate_image(img, clockwise))
+        mirror_btn = self._make_icon_button(mirror_glyph, mirror_tip, self.theme_colors['text'])
+        mirror_btn.clicked.connect(lambda _, img=img: self.mirror_image(
+            img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        ))
         info_grid.addWidget(rename_btn, 0, 0)
         info_grid.addWidget(name_label, 0, 1)
         info_grid.addWidget(rotate_btn, 0, 2)
+        info_grid.addWidget(mirror_btn, 0, 3)
         img['_name_label'] = name_label
+        img['_rotate_btn'] = rotate_btn
+        img['_mirror_btn'] = mirror_btn
 
         zoom_btn = self._make_icon_button('\U0001F50E', 'View full size', self.theme_colors['text'])
         zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
@@ -605,6 +638,42 @@ class DocumentTab(QWidget):
         display_thumb.thumbnail((self.thumb_size, self.thumb_size))
         img['_thumb_label'].setPixmap(pil_to_pixmap(display_thumb))
 
+    def mirror_image(self, img, horizontal=True):
+        transpose = Image.Transpose.FLIP_LEFT_RIGHT if horizontal else Image.Transpose.FLIP_TOP_BOTTOM
+        try:
+            with Image.open(img['orig_path']) as im:
+                flipped = im.transpose(transpose)
+                flipped.save(img['orig_path'])
+            with Image.open(img['orig_path']) as im:
+                trimmed = pe.trim_whitespace(im)
+                thumb = trimmed.copy()
+            thumb.thumbnail((pe.THUMB_CACHE_SIZE, pe.THUMB_CACHE_SIZE))
+            thumb.save(img['thumb_path'], 'PNG')
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Could not mirror image: {e}')
+            return
+
+        # Unlike rotation, flipping doesn't swap width/height, so the
+        # dimensions label needs no update here.
+        display_thumb = thumb.copy()
+        display_thumb.thumbnail((self.thumb_size, self.thumb_size))
+        img['_thumb_label'].setPixmap(pil_to_pixmap(display_thumb))
+
+    def set_direction_buttons_alt_state(self, alt_held):
+        """Live-swaps every card's rotate/mirror button to show which
+        direction Option/Alt currently selects, called whenever the app-
+        wide modifier watch (see ImgSnipsApp.notify) detects a change."""
+        (rotate_glyph, rotate_tip), (mirror_glyph, mirror_tip) = direction_glyphs(alt_held)
+        for img in self.images:
+            rotate_btn = img.get('_rotate_btn')
+            if rotate_btn:
+                rotate_btn.setText(rotate_glyph)
+                rotate_btn.setToolTip(rotate_tip)
+            mirror_btn = img.get('_mirror_btn')
+            if mirror_btn:
+                mirror_btn.setText(mirror_glyph)
+                mirror_btn.setToolTip(mirror_tip)
+
     def show_full_res(self, img):
         orig_path = img['orig_path']
         if not os.path.exists(orig_path):
@@ -632,10 +701,17 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._center_on_screen(965, 800)
         QApplication.instance().styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+        QApplication.instance().altModifierChanged.connect(self._on_alt_modifier_changed)
 
     def _on_color_scheme_changed(self, _scheme):
         for i in range(self.tab_widget.count()):
             self.tab_widget.widget(i).render_grid()
+
+    def _on_alt_modifier_changed(self, held):
+        # All open tabs, not just the active one, so a tab hidden mid-hold
+        # doesn't show stale rotate/mirror icons the moment you switch to it.
+        for i in range(self.tab_widget.count()):
+            self.tab_widget.widget(i).set_direction_buttons_alt_state(held)
 
     def _center_on_screen(self, w, h):
         screen = QApplication.primaryScreen().availableGeometry()

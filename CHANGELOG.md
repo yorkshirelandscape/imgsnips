@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Each opened PDF now gets its own tab instead of replacing (or merging into) whatever's already open. Icon size is remembered per tab; the window title and tab label both show the current file's name.
 - ImgSnips now opens a PDF handed to it directly -- a command-line argument, or (macOS) Finder's "Open With" on an already-running instance, which now lists ImgSnips as a PDF viewer.
+- New mirror button per card (flip horizontal by default, vertical with Option/Alt). It and the rotate button now swap their icon live while Option/Alt is held, previewing which direction a click will use.
 
 ### Fixed
 - Rotating an image made its thumbnail ignore the current icon size, overflowing its card into neighboring ones. The rotated thumbnail was set from the on-disk cache copy (capped at a fixed 280px for reuse at any icon size) without the same downscale-to-current-size step every other thumbnail gets; it's now downscaled the same way immediately after rotating.
