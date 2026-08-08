@@ -146,20 +146,23 @@ class ImgSnipsApp(QApplication):
       widget has focus: the rotate/mirror buttons swap their icon live
       while Option/Alt is held to preview which direction a click will
       perform. Key events are normally only delivered to the focused
-      widget, not to the application object itself (that's what event()
-      below catches), so this installs itself as an event filter instead
-      -- the documented, low-risk way to watch every event application-
-      wide. (An earlier version of this override used notify(), which
-      Qt's own docs call out as needed "only in very special situations":
-      it runs for literally every event in the app, and under a debugger
-      (which adds per-line tracing to every function call) that turned
-      out to make the app exit immediately on launch with no error.)"""
+      widget, not to the application object itself. Earlier versions of
+      this watched every application event instead (first via a notify()
+      override, then via installEventFilter()) to catch the key press --
+      both run a Python callback for literally every event dispatched
+      anywhere in the app, since an event filter is itself invoked from
+      inside Qt's own notify() dispatch. Polling sidesteps that entirely:
+      a few checks a second is indistinguishable to a human holding a key
+      down, and nothing hooks the event pipeline at all."""
     fileOpenRequested = pyqtSignal(str)
     altModifierChanged = pyqtSignal(bool)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.installEventFilter(self)
+        self._alt_held = False
+        self._alt_poll_timer = QTimer(self)
+        self._alt_poll_timer.timeout.connect(self._poll_alt_modifier)
+        self._alt_poll_timer.start(50)
 
     def event(self, event):
         if event.type() == QEvent.Type.FileOpen:
@@ -167,11 +170,11 @@ class ImgSnipsApp(QApplication):
             return True
         return super().event(event)
 
-    def eventFilter(self, obj, event):
-        event_type = event.type()
-        if event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_Alt:
-            self.altModifierChanged.emit(event_type == QEvent.Type.KeyPress)
-        return super().eventFilter(obj, event)
+    def _poll_alt_modifier(self):
+        held = bool(self.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+        if held != self._alt_held:
+            self._alt_held = held
+            self.altModifierChanged.emit(held)
 
 
 class ExtractWorker(QObject):
