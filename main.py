@@ -19,7 +19,7 @@ import sys
 import shutil
 import threading
 
-from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QEvent, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QEvent, pyqtSignal, QUrl, QSettings
 from PyQt6.QtGui import (
     QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
 )
@@ -931,9 +931,12 @@ class MainWindow(QMainWindow):
 
     # --- PDF opening / extraction ---
     def open_pdf(self):
-        pdf_path, _ = QFileDialog.getOpenFileName(self, 'Select PDF file', '', 'PDF files (*.pdf)')
+        settings = QSettings()
+        start_dir = settings.value('paths/last_open_dir', '')
+        pdf_path, _ = QFileDialog.getOpenFileName(self, 'Select PDF file', start_dir, 'PDF files (*.pdf)')
         if not pdf_path:
             return
+        settings.setValue('paths/last_open_dir', os.path.dirname(pdf_path))
         self.open_pdf_path(pdf_path)
 
     def open_pdf_path(self, pdf_path):
@@ -1045,9 +1048,12 @@ class MainWindow(QMainWindow):
         if not selected:
             QMessageBox.information(self, 'No Selection', 'No images selected.')
             return
-        outdir = QFileDialog.getExistingDirectory(self, 'Select output folder')
+        settings = QSettings()
+        start_dir = settings.value('paths/last_save_dir', '')
+        outdir = QFileDialog.getExistingDirectory(self, 'Select output folder', start_dir)
         if not outdir:
             return
+        settings.setValue('paths/last_save_dir', outdir)
         export_fmt = 'WEBP' if self.rb_webp.isChecked() else 'PNG'
         resize_mode = self.combo_resize.currentData()
         resize_length = self.spin_resize_length.value()
@@ -1107,6 +1113,8 @@ class MainWindow(QMainWindow):
 
 def main():
     app = ImgSnipsApp(sys.argv)
+    app.setOrganizationName('ImgSnips')
+    app.setApplicationName('ImgSnips')
     app.setWindowIcon(QIcon(ICON_PATH))
     load_bundled_fonts()
     win = MainWindow()
