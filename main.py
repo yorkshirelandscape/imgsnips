@@ -147,11 +147,19 @@ class ImgSnipsApp(QApplication):
       while Option/Alt is held to preview which direction a click will
       perform. Key events are normally only delivered to the focused
       widget, not to the application object itself (that's what event()
-      below catches) -- notify() is the one hook Qt calls for every event
-      dispatched anywhere in the app, which is what a global modifier
-      watch actually needs."""
+      below catches), so this installs itself as an event filter instead
+      -- the documented, low-risk way to watch every event application-
+      wide. (An earlier version of this override used notify(), which
+      Qt's own docs call out as needed "only in very special situations":
+      it runs for literally every event in the app, and under a debugger
+      (which adds per-line tracing to every function call) that turned
+      out to make the app exit immediately on launch with no error.)"""
     fileOpenRequested = pyqtSignal(str)
     altModifierChanged = pyqtSignal(bool)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.installEventFilter(self)
 
     def event(self, event):
         if event.type() == QEvent.Type.FileOpen:
@@ -159,11 +167,11 @@ class ImgSnipsApp(QApplication):
             return True
         return super().event(event)
 
-    def notify(self, receiver, event):
+    def eventFilter(self, obj, event):
         event_type = event.type()
         if event_type in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease) and event.key() == Qt.Key.Key_Alt:
             self.altModifierChanged.emit(event_type == QEvent.Type.KeyPress)
-        return super().notify(receiver, event)
+        return super().eventFilter(obj, event)
 
 
 class ExtractWorker(QObject):
