@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The grid's reflow-on-resize could get stuck showing a stale column count after opening a second PDF; it now always rebuilds on resize.
 - PyMuPDF intermittently dropped extracted files with no error, especially when opening PDFs back-to-back; extraction now locks around PyMuPDF calls, runs on a plain thread instead of `QThread`, and skips a card instead of crashing if its files never arrive.
 
+### Changed
+- Slightly enlarged each card's icon buttons, name, and dimensions text for legibility, with proportionally more breathing room around them.
+
 ### ToDo
 - Round 2
   - Option to set background color instead of transparent

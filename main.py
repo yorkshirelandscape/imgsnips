@@ -19,10 +19,11 @@ import sys
 import shutil
 import threading
 
-from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QEvent, pyqtSignal, QUrl, QSettings
+from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QRectF, QEvent, pyqtSignal, QUrl, QSettings
 from PyQt6.QtGui import (
     QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
 )
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QFileDialog,
@@ -77,6 +78,28 @@ def emoji_icon(glyph, point_size):
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
     painter.end()
     return QIcon(pixmap), QSize(side, side)
+
+
+def svg_icon(svg_path, side, color):
+    """Render a bundled SVG asset as a fixed-size QIcon, tinted to a given
+    color -- the SVG's own fill/stroke color is irrelevant, since it's
+    recolored uniformly after rendering, so the same asset works against
+    the app's live light/dark theme text color without needing per-theme
+    variants on disk."""
+    renderer = QSvgRenderer(svg_path)
+    pixmap = QPixmap(side, side)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter, QRectF(0, 0, side, side))
+    painter.end()
+    tinted = QPixmap(side, side)
+    tinted.fill(Qt.GlobalColor.transparent)
+    tint_painter = QPainter(tinted)
+    tint_painter.fillRect(0, 0, side, side, QColor(color))
+    tint_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    tint_painter.drawPixmap(0, 0, pixmap)
+    tint_painter.end()
+    return QIcon(tinted), QSize(side, side)
 
 
 def direction_glyphs(alt_held):
@@ -477,8 +500,8 @@ class DocumentTab(QWidget):
         card = QFrame()
         card.setObjectName('imageCard')
         v = QVBoxLayout(card)
-        v.setContentsMargins(6, 6, 6, 1)
-        v.setSpacing(4)
+        v.setContentsMargins(7, 7, 7, 1)
+        v.setSpacing(5)
 
         pil_thumb = Image.open(thumb_path)
         pil_thumb.thumbnail((self.thumb_size, self.thumb_size))
@@ -494,16 +517,16 @@ class DocumentTab(QWidget):
         img['_thumb_label'] = thumb_label
 
         info_grid = QGridLayout()
-        info_grid.setContentsMargins(0, 2, 0, 0)
-        info_grid.setHorizontalSpacing(3)
-        info_grid.setVerticalSpacing(1)
+        info_grid.setContentsMargins(0, 3, 0, 0)
+        info_grid.setHorizontalSpacing(4)
+        info_grid.setVerticalSpacing(2)
         info_grid.setColumnStretch(1, 1)
 
         rename_btn = self._make_icon_button('✏️', 'Rename', self.theme_colors['text'])
         rename_btn.clicked.connect(lambda _, img=img: self.rename_image(img))
         name_label = ClickableLabel(img['save_name'])
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_label.setFont(QFont(NAME_FONT_FAMILY, 13))
+        name_label.setFont(QFont(NAME_FONT_FAMILY, 15))
         name_label.setStyleSheet(
             f"color: {self.theme_colors['text']}; background: {self.theme_colors['name_bg']}; "
             'padding: 1px 4px;'
@@ -537,7 +560,7 @@ class DocumentTab(QWidget):
         zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
         dims_label = QLabel(f"{meta.get('width', '?')} x {meta.get('height', '?')}")
         dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        dims_label.setFont(QFont(SIZE_FONT_FAMILY, 10))
+        dims_label.setFont(QFont(SIZE_FONT_FAMILY, 11))
         dims_label.setStyleSheet(f"color: {self.theme_colors['secondary_text']};")
         copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
         copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
@@ -560,11 +583,11 @@ class DocumentTab(QWidget):
 
     def _make_icon_button(self, glyph, tooltip, color):
         btn = IconButton(glyph)
-        btn.setFixedSize(22, 22)
+        btn.setFixedSize(26, 26)
         btn.setToolTip(tooltip)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setStyleSheet(
-            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 12px; border-radius: 4px; }}'
+            f'QPushButton {{ border: none; background: transparent; color: {color}; font-size: 14px; border-radius: 4px; }}'
             'QPushButton:hover { background: rgba(127, 127, 127, 0.25); }'
         )
         return btn
