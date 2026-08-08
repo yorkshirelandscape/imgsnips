@@ -1051,8 +1051,9 @@ class MainWindow(QMainWindow):
         export_fmt = 'WEBP' if self.rb_webp.isChecked() else 'PNG'
         resize_mode = self.combo_resize.currentData()
         resize_length = self.spin_resize_length.value()
-        kept = 0
+
         name_counts = {}
+        planned = []
         for img in selected:
             base_name = img.get('save_name') or img['filename']
             name = base_name
@@ -1062,6 +1063,26 @@ class MainWindow(QMainWindow):
             else:
                 name_counts[name] = 0
             out_path = os.path.join(outdir, f"{name}.{export_fmt.lower()}")
+            planned.append((img, out_path))
+
+        existing = [out_path for _, out_path in planned if os.path.exists(out_path)]
+        if existing:
+            names = [os.path.basename(p) for p in existing]
+            shown = names[:10]
+            listing = '\n'.join(shown)
+            if len(names) > len(shown):
+                listing += f'\n...and {len(names) - len(shown)} more'
+            reply = QMessageBox.question(
+                self, 'Overwrite Existing Files?',
+                f'{len(existing)} file(s) already exist in this folder and will be overwritten:\n\n{listing}',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        kept = 0
+        for img, out_path in planned:
             try:
                 with Image.open(img['orig_path']) as pil_img:
                     pil_img = self._apply_resize(pil_img, resize_mode, resize_length)
