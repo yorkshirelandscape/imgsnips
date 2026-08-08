@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rotating an image could overflow its thumbnail past the card's current size; it's now downscaled consistently like every other thumbnail.
 - The grid's reflow-on-resize could get stuck showing a stale column count after opening a second PDF; it now always rebuilds on resize.
 - PyMuPDF intermittently dropped extracted files with no error, especially when opening PDFs back-to-back; extraction now locks around PyMuPDF calls, runs on a plain thread instead of `QThread`, and skips a card instead of crashing if its files never arrive.
+- Some CMYK images extracted as color negatives again, occasionally. A previous fix manually un-inverted CMYK JPEGs carrying Adobe's APP14 marker, but a newer Pillow now does that unconditionally for every CMYK JPEG regardless of the marker; the two corrections stacked into a double-inversion for exactly the images still carrying it. Removed the now-redundant manual step.
 
 ### Changed
 - Slightly enlarged each card's icon buttons, name, and dimensions text for legibility, with proportionally more breathing room around them.

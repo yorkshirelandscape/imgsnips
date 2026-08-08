@@ -81,16 +81,23 @@ def enumerate_images(doc):
 
 
 def _open_raw_image(doc, xref):
-    """Decode an image object to a PIL image, handling CMYK JPEGs written by
-    Adobe tools (InDesign, Photoshop) that render as color negatives of
-    themselves: Adobe's CMYK JPEG encoder stores channel values inverted (a
-    legacy Photoshop convention marked by the APP14 'Adobe' segment), and
-    neither libjpeg nor MuPDF's own decoder correct for it automatically."""
+    """Decode an image object to a PIL image.
+
+    CMYK JPEGs written by Adobe tools (InDesign, Photoshop) store channel
+    values inverted (a legacy Photoshop convention). This used to be
+    corrected here manually, gated on the JPEG's APP14 'Adobe' marker --
+    but Pillow's own JpegImagePlugin now unconditionally assumes that
+    convention for every CMYK JPEG regardless of the marker (its rawmode
+    selection literally comments "assume adobe conventions"), so by the
+    time im.load() returns, the pixel data is already correct. Manually
+    inverting again on top of that -- as this function used to, whenever
+    the marker happened to be present -- double-inverts exactly those
+    images back into color negatives. Confirmed empirically: a known RGB
+    color round-tripped through a marked CMYK JPEG decoded correctly on
+    its own, then came out wrong once the old code's extra inversion ran."""
     data = doc.extract_image(xref)['image']
     im = Image.open(io.BytesIO(data))
     im.load()
-    if im.mode == 'CMYK' and im.info.get('adobe'):
-        im = Image.eval(im, lambda x: 255 - x)
     return im
 
 
