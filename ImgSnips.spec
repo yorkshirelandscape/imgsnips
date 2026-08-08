@@ -5,7 +5,12 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('spinner.gif', '.'), ('imgsnips.png', '.'), ('fonts', 'fonts')],
+    datas=[
+        ('spinner.gif', '.'), ('imgsnips.png', '.'), ('fonts', 'fonts'),
+        # icons/source/ holds the editable Inkscape original, not needed at
+        # runtime -- only the two Qt-rendered SVGs actually get bundled.
+        ('icons/flip-horizontal.svg', 'icons'), ('icons/flip-vertical.svg', 'icons'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
