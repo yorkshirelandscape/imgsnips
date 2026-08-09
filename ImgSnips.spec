@@ -7,9 +7,10 @@ a = Analysis(
     binaries=[],
     datas=[
         ('spinner.gif', '.'), ('imgsnips.png', '.'), ('fonts', 'fonts'),
-        # icons/source/ holds the editable Inkscape original, not needed at
-        # runtime -- only the two Qt-rendered SVGs actually get bundled.
+        # icons/source/ holds the editable Inkscape originals, not needed at
+        # runtime -- only the Qt-rendered SVGs actually get bundled.
         ('icons/flip-horizontal.svg', 'icons'), ('icons/flip-vertical.svg', 'icons'),
+        ('icons/rotate-right.svg', 'icons'), ('icons/rotate-left.svg', 'icons'),
     ],
     hiddenimports=[],
     hookspath=[],

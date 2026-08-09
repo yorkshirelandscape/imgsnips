@@ -91,7 +91,7 @@ jobs:
         # so this isn't specific to our Pipfile.
         run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." --add-data "fonts;fonts" --add-data "icons/flip-horizontal.svg;icons" --add-data "icons/flip-vertical.svg;icons" main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --icon packaging/icon/imgsnips.ico --add-data "spinner.gif;." --add-data "imgsnips.png;." --add-data "fonts;fonts" --add-data "icons/flip-horizontal.svg;icons" --add-data "icons/flip-vertical.svg;icons" --add-data "icons/rotate-right.svg;icons" --add-data "icons/rotate-left.svg;icons" main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6
@@ -128,7 +128,7 @@ jobs:
         # so this isn't specific to our Pipfile.
         run: pipenv run pip install packaging setuptools
       - name: Build with PyInstaller
-        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" --add-data "icons/flip-horizontal.svg:icons" --add-data "icons/flip-vertical.svg:icons" main.py
+        run: pipenv run pyinstaller --onefile --windowed --name ImgSnips --add-data "spinner.gif:." --add-data "imgsnips.png:." --add-data "fonts:fonts" --add-data "icons/flip-horizontal.svg:icons" --add-data "icons/flip-vertical.svg:icons" --add-data "icons/rotate-right.svg:icons" --add-data "icons/rotate-left.svg:icons" main.py
 
       - name: Zip artifact
         uses: thedoctor0/zip-release@0.7.6

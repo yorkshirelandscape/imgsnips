@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="1024"
+   height="1024"
+   viewBox="0 0 1024 1024"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   sodipodi:docname="rotate-icon.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="px"
+     showgrid="true"
+     inkscape:zoom="0.70600621"
+     inkscape:cx="535.40606"
+     inkscape:cy="505.66128"
+     inkscape:current-layer="layer1">
+    <inkscape:grid
+       id="grid1"
+       units="px"
+       originx="0"
+       originy="0"
+       spacingx="64"
+       spacingy="64"
+       empcolor="#fd0011"
+       empopacity="0.30196078"
+       color="#0099e5"
+       opacity="0.14901961"
+       empspacing="4"
+       enabled="true"
+       visible="true" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <rect
+       x="0"
+       y="0"
+       width="1024"
+       height="1024"
+       id="rect1" />
+    <rect
+       x="0"
+       y="0"
+       width="1024"
+       height="1024"
+       id="rect2" />
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <text
+       xml:space="preserve"
+       id="text1"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:800px;font-family:'Bodoni Ornaments';-inkscape-font-specification:'Bodoni Ornaments, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;text-align:center;white-space:pre;shape-inside:url(#rect1);shape-padding:0;display:none;fill:#ffffff;fill-opacity:1;stroke:#000000;stroke-width:12;paint-order:markers fill stroke"
+       transform="translate(-115.70213,202.08129)"><tspan
+         x="120.78906"
+         y="747.35265"
+         id="tspan2"> ⃕</tspan></text>
+    <path
+       d="M 967.89247,743.99726 C 904.99874,730.722 776.14521,763.46871 688.04045,732.58288 635.14626,714.0404 574.45037,686.21656 552.52571,633.03226 592.84319,634.29604 670.8721,606.96515 690.87329,586.12791 589.44313,488.49453 540.71397,478.30131 455.25939,483.76844 328.11258,491.90291 203.68169,562.99111 126.95835,679.49978 50.235019,796.00845 26.437702,513.95035 90.451365,436.24212 158.32612,353.84679 327.72659,274.70768 461.89703,280.28303 c 124.93557,5.1916 213.01311,37.52586 332.63827,173.41979 21.6341,-18.71799 49.35444,-88.7567 29.86935,-134.63763 55.31363,24.33799 90.83062,71.05427 113.91988,121.55863 42.31699,92.56219 30.98677,225.93581 29.56794,303.37344 z"
+       id="text3"
+       style="font-size:800px;font-family:'Bodoni Ornaments';-inkscape-font-specification:'Bodoni Ornaments, Normal';text-align:center;white-space:pre;fill:#000000;fill-opacity:1;stroke:#000000;stroke-width:16;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;paint-order:markers fill stroke"
+       aria-label="⃕"
+       sodipodi:nodetypes="caccassaccsc" />
+  </g>
+</svg>

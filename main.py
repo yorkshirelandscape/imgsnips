@@ -44,6 +44,8 @@ FONTS_DIR = os.path.join(SCRIPT_DIR, 'fonts')
 ICONS_DIR = os.path.join(SCRIPT_DIR, 'icons')
 FLIP_HORIZONTAL_ICON = os.path.join(ICONS_DIR, 'flip-horizontal.svg')
 FLIP_VERTICAL_ICON = os.path.join(ICONS_DIR, 'flip-vertical.svg')
+ROTATE_RIGHT_ICON = os.path.join(ICONS_DIR, 'rotate-right.svg')
+ROTATE_LEFT_ICON = os.path.join(ICONS_DIR, 'rotate-left.svg')
 DEFAULT_THUMB_SIZE = 160
 MIN_THUMB_SIZE = 80
 # Can't exceed the cached thumbnail's own resolution -- PIL's thumbnail()
@@ -110,12 +112,11 @@ def direction_glyphs(alt_held):
     selects rather than a static icon plus a tooltip explaining the
     modifier -- shared by the buttons' initial state (in case Alt is
     already held when a card is built) and by the live app-wide watch
-    that swaps them the moment Alt is pressed or released. Rotate is
-    still a plain Unicode glyph; mirror returns an SVG asset path
-    instead, rendered via svg_icon() rather than button text."""
+    that swaps them the moment Alt is pressed or released. Both return
+    SVG asset paths, rendered via svg_icon() rather than button text."""
     if alt_held:
-        return ('↺', 'Rotate left'), (FLIP_VERTICAL_ICON, 'Flip vertical')
-    return ('↻', 'Rotate right (Option/Alt for left)'), (FLIP_HORIZONTAL_ICON, 'Flip horizontal (Option/Alt for vertical)')
+        return (ROTATE_LEFT_ICON, 'Rotate left'), (FLIP_VERTICAL_ICON, 'Flip vertical')
+    return (ROTATE_RIGHT_ICON, 'Rotate right (Option/Alt for left)'), (FLIP_HORIZONTAL_ICON, 'Flip horizontal (Option/Alt for vertical)')
 
 
 def is_dark_mode(widget):
@@ -539,8 +540,8 @@ class DocumentTab(QWidget):
         name_label.setToolTip('Double-click to rename')
         name_label.doubleClicked.connect(lambda img=img: self.rename_image(img))
         alt_held = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
-        (rotate_glyph, rotate_tip), (mirror_icon_path, mirror_tip) = direction_glyphs(alt_held)
-        rotate_btn = self._make_icon_button(rotate_glyph, rotate_tip, self.theme_colors['text'])
+        (rotate_icon_path, rotate_tip), (mirror_icon_path, mirror_tip) = direction_glyphs(alt_held)
+        rotate_btn = self._make_svg_icon_button(rotate_icon_path, rotate_tip, self.theme_colors['text'])
         # Unlike the thumbnail's right-click gesture, either mouse button
         # rotates the same way here -- only Option/Alt picks the direction,
         # so there's nothing to remember about which button does what on
@@ -717,15 +718,17 @@ class DocumentTab(QWidget):
         direction Option/Alt currently selects, called whenever the app-
         wide modifier watch (see ImgSnipsApp._poll_alt_modifier) detects a
         change."""
-        (rotate_glyph, rotate_tip), (mirror_icon_path, mirror_tip) = direction_glyphs(alt_held)
-        # Rendered once outside the loop: every card's mirror button swaps
-        # to the same icon simultaneously, so there's no need to re-render
-        # the same SVG from scratch per card.
+        (rotate_icon_path, rotate_tip), (mirror_icon_path, mirror_tip) = direction_glyphs(alt_held)
+        # Rendered once outside the loop: every card's rotate/mirror button
+        # swaps to the same icon simultaneously, so there's no need to
+        # re-render the same SVG from scratch per card.
+        rotate_icon, rotate_icon_size = svg_icon(rotate_icon_path, 18, self.theme_colors['text'])
         mirror_icon, mirror_icon_size = svg_icon(mirror_icon_path, 18, self.theme_colors['text'])
         for img in self.images:
             rotate_btn = img.get('_rotate_btn')
             if rotate_btn:
-                rotate_btn.setText(rotate_glyph)
+                rotate_btn.setIcon(rotate_icon)
+                rotate_btn.setIconSize(rotate_icon_size)
                 rotate_btn.setToolTip(rotate_tip)
             mirror_btn = img.get('_mirror_btn')
             if mirror_btn:
