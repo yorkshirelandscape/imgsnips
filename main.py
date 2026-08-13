@@ -175,23 +175,24 @@ class ImgSnipsApp(QApplication):
       widget has focus: the rotate/mirror buttons swap their icon live
       while Option/Alt is held to preview which direction a click will
       perform. Key events are normally only delivered to the focused
-      widget, not to the application object itself. Earlier versions of
-      this watched every application event instead (first via a notify()
-      override, then via installEventFilter()) to catch the key press --
-      both run a Python callback for literally every event dispatched
-      anywhere in the app, since an event filter is itself invoked from
-      inside Qt's own notify() dispatch. Polling sidesteps that entirely:
-      a few checks a second is indistinguishable to a human holding a key
-      down, and nothing hooks the event pipeline at all."""
+      widget, not to the application object itself. An earlier version
+      polled QApplication.keyboardModifiers() on a timer instead, to
+      avoid hooking the event pipeline at all -- but that cached value
+      turned out to only get refreshed on the next event Qt happened to
+      process, which on macOS could sit stale well past the real key
+      transition (observed: the icons wouldn't actually swap until the
+      mouse moved, since a mouse-move event was often what finally
+      refreshed it). Watching Alt's own key-press/release event directly,
+      via an application-wide event filter, sidesteps that staleness
+      entirely -- at the cost of a cheap type check on every event
+      app-wide, which is what polling was originally chosen to avoid."""
     fileOpenRequested = pyqtSignal(str)
     altModifierChanged = pyqtSignal(bool)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._alt_held = False
-        self._alt_poll_timer = QTimer(self)
-        self._alt_poll_timer.timeout.connect(self._poll_alt_modifier)
-        self._alt_poll_timer.start(50)
+        self.installEventFilter(self)
 
     def event(self, event):
         if event.type() == QEvent.Type.FileOpen:
@@ -199,11 +200,14 @@ class ImgSnipsApp(QApplication):
             return True
         return super().event(event)
 
-    def _poll_alt_modifier(self):
-        held = bool(self.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
-        if held != self._alt_held:
-            self._alt_held = held
-            self.altModifierChanged.emit(held)
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            if event.key() == Qt.Key.Key_Alt and not event.isAutoRepeat():
+                held = event.type() == QEvent.Type.KeyPress
+                if held != self._alt_held:
+                    self._alt_held = held
+                    self.altModifierChanged.emit(held)
+        return super().eventFilter(obj, event)
 
 
 class ExtractWorker(QObject):
@@ -780,7 +784,7 @@ class DocumentTab(QWidget):
     def set_direction_buttons_alt_state(self, alt_held):
         """Live-swaps every card's rotate/mirror button to show which
         direction Option/Alt currently selects, called whenever the app-
-        wide modifier watch (see ImgSnipsApp._poll_alt_modifier) detects a
+        wide modifier watch (see ImgSnipsApp.eventFilter) detects a
         change."""
         (rotate_icon_path, rotate_tip), (mirror_icon_path, mirror_tip) = direction_glyphs(alt_held)
         # Rendered once outside the loop: every card's rotate/mirror button
