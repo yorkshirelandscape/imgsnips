@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('spinner.gif', '.'), ('imgsnips.png', '.'), ('fonts', 'fonts'),
+        ('imgsnips.png', '.'), ('fonts', 'fonts'),
         # icons/source/ holds the editable Inkscape originals, not needed at
         # runtime -- only the Qt-rendered SVGs actually get bundled.
         ('icons/flip-horizontal.svg', 'icons'), ('icons/flip-vertical.svg', 'icons'),

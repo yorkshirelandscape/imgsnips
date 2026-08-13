@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Slightly enlarged each card's icon buttons, name, and dimensions text for legibility, with proportionally more breathing room around them.
 - The mirror button now uses custom artwork (a hollow vs. solid shape split by a dashed divider) instead of a plain ↔/↕ Unicode glyph, still swapping live between horizontal and vertical on Option/Alt.
 - The rotate button now uses custom artwork (a bold curled arrow) instead of a plain ↻/↺ Unicode glyph, still swapping live between clockwise and counter-clockwise on Option/Alt.
+- The loading spinner is now drawn directly instead of playing a baked GIF, so it's crisp at any size and tints to the live light/dark theme like the rest of the UI instead of one fixed color.
+- Rearranged each card's buttons around the name box (zoom/rename above, copy below rename, rotate/mirror anchoring the bottom corners) to leave room for a possible future button, instead of two flat rows.
 
 ### ToDo
 - Round 2

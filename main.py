@@ -16,12 +16,13 @@
 
 import os
 import sys
+import math
 import shutil
 import threading
 
-from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QRectF, QEvent, pyqtSignal, QUrl, QSettings
+from PyQt6.QtCore import Qt, QObject, QTimer, QSize, QPointF, QRectF, QEvent, pyqtSignal, QUrl, QSettings
 from PyQt6.QtGui import (
-    QMovie, QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
+    QPixmap, QCursor, QPalette, QColor, QIcon, QFont, QFontDatabase, QFontMetrics, QPainter,
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -38,7 +39,6 @@ import pdf_extract as pe
 # PyInstaller's onefile mode extracts bundled data files to a temp dir at
 # runtime (sys._MEIPASS), not next to the script/executable.
 SCRIPT_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-SPINNER_PATH = os.path.join(SCRIPT_DIR, 'spinner.gif')
 ICON_PATH = os.path.join(SCRIPT_DIR, 'imgsnips.png')
 FONTS_DIR = os.path.join(SCRIPT_DIR, 'fonts')
 ICONS_DIR = os.path.join(SCRIPT_DIR, 'icons')
@@ -280,6 +280,63 @@ class IconButton(QPushButton):
         super().mousePressEvent(event)
 
 
+class SpinnerWidget(QWidget):
+    """A small vector-drawn activity indicator (a ring of dots fading into
+    a trailing comet), replacing an earlier baked GIF asset. Painting it
+    directly instead of decoding raster frames means it's crisp at any
+    size/DPI instead of stuck at one fixed resolution, tints to whatever
+    color it's given -- typically the live theme's text color -- instead
+    of being baked to one fixed palette, and costs nothing while hidden,
+    since the QTimer driving it only ever runs between start()/stop()."""
+
+    DOT_COUNT = 8
+    TICK_MS = 188  # one full revolution roughly every 1.5s
+
+    def __init__(self, color, diameter=48, parent=None):
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._diameter = diameter
+        self._lead = 0
+        self.setFixedSize(diameter, diameter)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance)
+
+    def set_color(self, color):
+        self._color = QColor(color)
+        self.update()
+
+    def start(self):
+        self._lead = 0
+        self._timer.start(self.TICK_MS)
+
+    def stop(self):
+        self._timer.stop()
+
+    def _advance(self):
+        self._lead = (self._lead + 1) % self.DOT_COUNT
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = self._diameter / 2
+        orbit = self._diameter * 0.36
+        dot_radius = self._diameter * 0.07
+        painter.setPen(Qt.PenStyle.NoPen)
+        for i in range(self.DOT_COUNT):
+            angle = 2 * math.pi * i / self.DOT_COUNT - math.pi / 2
+            x = center + orbit * math.cos(angle)
+            y = center + orbit * math.sin(angle)
+            # Dots fade from fully opaque at the current leading position
+            # to nearly transparent at the trailing end, like a comet.
+            distance = (self._lead - i) % self.DOT_COUNT
+            opacity = 1.0 - distance / self.DOT_COUNT
+            dot_color = QColor(self._color)
+            dot_color.setAlphaF(max(opacity, 0.12))
+            painter.setBrush(dot_color)
+            painter.drawEllipse(QPointF(x, y), dot_radius, dot_radius)
+
+
 class FullImageDialog(QDialog):
     def __init__(self, parent, orig_path, meta, img_file):
         super().__init__(parent)
@@ -335,7 +392,6 @@ class DocumentTab(QWidget):
         self.filename = os.path.basename(pdf_path)
         self.images = []
         self.tmpdir = None
-        self.spinner_movie = None
         self.theme_colors = {}
         self._selection_anchor_idx = None
         self.thumb_size = thumb_size
@@ -383,9 +439,14 @@ class DocumentTab(QWidget):
         # --- Spinner page ---
         spinner_page = QWidget()
         spinner_layout = QVBoxLayout(spinner_page)
-        self.spinner_label = QLabel()
-        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        spinner_layout.addWidget(self.spinner_label)
+        self.spinner_widget = SpinnerWidget(self.palette().color(QPalette.ColorRole.WindowText))
+        centering_row = QHBoxLayout()
+        centering_row.addStretch(1)
+        centering_row.addWidget(self.spinner_widget)
+        centering_row.addStretch(1)
+        spinner_layout.addStretch(1)
+        spinner_layout.addLayout(centering_row)
+        spinner_layout.addStretch(1)
         self.stack.addWidget(spinner_page)  # index 1
 
         layout.addWidget(self.stack)
@@ -401,15 +462,12 @@ class DocumentTab(QWidget):
         self.worker.start()
 
     def show_spinner(self):
-        self.spinner_movie = QMovie(SPINNER_PATH)
-        self.spinner_label.setMovie(self.spinner_movie)
-        self.spinner_movie.start()
+        self.spinner_widget.set_color(self.palette().color(QPalette.ColorRole.WindowText))
+        self.spinner_widget.start()
         self.stack.setCurrentIndex(1)
 
     def hide_spinner(self):
-        if self.spinner_movie:
-            self.spinner_movie.stop()
-            self.spinner_movie = None
+        self.spinner_widget.stop()
 
     def on_no_images(self):
         self.hide_spinner()
@@ -554,25 +612,31 @@ class DocumentTab(QWidget):
         mirror_btn.clicked.connect(lambda _, img=img: self.mirror_image(
             img, not bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
         ))
-        info_grid.addWidget(rename_btn, 0, 0)
-        info_grid.addWidget(name_label, 0, 1)
-        info_grid.addWidget(rotate_btn, 0, 2)
-        info_grid.addWidget(mirror_btn, 0, 3)
-        img['_name_label'] = name_label
-        img['_rotate_btn'] = rotate_btn
-        img['_mirror_btn'] = mirror_btn
-
         zoom_btn = self._make_icon_button('\U0001F50E', 'View full size', self.theme_colors['text'])
         zoom_btn.clicked.connect(lambda _, img=img: self.show_full_res(img))
+        copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
+        copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
         dims_label = QLabel(f"{meta.get('width', '?')} x {meta.get('height', '?')}")
         dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         dims_label.setFont(QFont(SIZE_FONT_FAMILY, 11))
         dims_label.setStyleSheet(f"color: {self.theme_colors['secondary_text']};")
-        copy_btn = self._make_icon_button('\U0001F4CB', 'Copy image to clipboard', self.theme_colors['text'])
-        copy_btn.clicked.connect(lambda _, img=img: self.copy_image(img))
-        info_grid.addWidget(zoom_btn, 1, 0)
-        info_grid.addWidget(dims_label, 1, 1)
+
+        # Zoom/rename flank the name box's top half, copy sits under rename
+        # (the name box spans both rows to fill the gap opposite it -- its
+        # bottom-left corner is left open for a possible future "jump to
+        # source page" button), dims center below, and rotate/mirror anchor
+        # the bottom corners -- matching the card layout mocked up alongside
+        # that page-button idea.
+        info_grid.addWidget(zoom_btn, 0, 0)
+        info_grid.addWidget(name_label, 0, 1, 2, 1, Qt.AlignmentFlag.AlignVCenter)
+        info_grid.addWidget(rename_btn, 0, 2)
         info_grid.addWidget(copy_btn, 1, 2)
+        info_grid.addWidget(dims_label, 2, 0, 1, 3)
+        info_grid.addWidget(rotate_btn, 3, 0)
+        info_grid.addWidget(mirror_btn, 3, 2)
+        img['_name_label'] = name_label
+        img['_rotate_btn'] = rotate_btn
+        img['_mirror_btn'] = mirror_btn
         img['_dims_label'] = dims_label
 
         v.addLayout(info_grid)
