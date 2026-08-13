@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Slightly enlarged each card's icon buttons, name, and dimensions text for legibility, with proportionally more breathing room around them.
-- The mirror button now uses custom artwork (a plain vs. hatched shape split by a dashed divider) instead of a plain ↔/↕ Unicode glyph, still swapping live between horizontal and vertical on Option/Alt.
+- The mirror button now uses custom artwork (a hollow vs. solid shape split by a dashed divider) instead of a plain ↔/↕ Unicode glyph, still swapping live between horizontal and vertical on Option/Alt.
 - The rotate button now uses custom artwork (a bold curled arrow) instead of a plain ↻/↺ Unicode glyph, still swapping live between clockwise and counter-clockwise on Option/Alt.
 
 ### ToDo
